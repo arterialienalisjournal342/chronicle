@@ -22,7 +22,7 @@ cross_references:
 
 ```bash
 # Clone
-git clone https://github.com/geekmuse/chronicle
+git clone https://github.com/YOUR_USERNAME/chronicle.git
 cd chronicle
 
 # Build
