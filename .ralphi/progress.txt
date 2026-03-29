@@ -1,4 +1,13 @@
 ## Codebase Patterns
+- `cli::import_impl(agent, dry_run, config_path, home)` — testable core of `handle_import`; accepts injected home dir so tests don't touch real `$HOME`
+- `ImportParams<'a>` struct in `cli/mod.rs` — bundles all per-agent-import params to avoid clippy::too_many_arguments (>7 args)
+- `manager: Option<&git::RepoManager>` in `ImportParams` — `None` in dry-run mode; `import_agent_sessions` calls `.expect()` before using it (only reached in non-dry-run path)
+- Import dry-run pattern: skip `RepoManager::init_or_open` entirely when `dry_run=true`; no repo path is created
+- `import_agent_sessions` loop: collect + sort subdirs, skip dirs with no `.jsonl` files, for each dir write all files then `stage_files` + `commit_if_staged` (one commit per dir)
+- L1 canon in import: `registry.canonicalize_pi_dir(dir_name)` / `canonicalize_claude_dir(dir_name)` on the source subdir name; result is the repo working-tree subdir name
+- Content canon in import: `registry.canonicalize_line(line, canon_level)` per line; `unwrap_or_else` falls back to original line with `eprintln!` warning on error
+- Trailing newline preservation: `if raw.ends_with('\n') && !canonical_content.ends_with('\n') { canonical_content.push('\n'); }`
+- Staged path strings: `format!("{repo_rel_base}/{canonical_dir}/{filename}")` → `PathBuf::from(...)` → deref to `&Path` for `stage_files`
 - `git::RepoManager`: wraps `git2::Repository`; `init_or_open(path, remote_url)` → open if exists (ErrorCode::NotFound triggers init), set remote if provided; `ensure_working_tree()` creates pi/sessions/ + claude/projects/ (both with .gitkeep) + .chronicle/; `ensure_manifest()` writes default if absent; all public methods are idempotent
 - `git::GitError`: thiserror enum — `Git2(git2::Error)`, `Io { path, source }`, `Manifest(String)`; private `GitError::io(path, source)` constructor reduces boilerplate
 - `git::Manifest` / `git::MachineEntry`: serde structs for `.chronicle/manifest.json`; `version: u32` (always 1), `machines: HashMap<String, MachineEntry>`; `last_sync` is `Option<DateTime<Utc>>` with `skip_serializing_if = "Option::is_none"`
@@ -419,4 +428,40 @@ Corrective Plan: N/A
   - Test helpers that duplicate the core init logic (rather than calling `handle_init`) avoid the real home dir and allow injecting a tempdir config path
   - `config::load()` on an existing file is read-only; the init handler owns the write-back step, enabling idempotent re-initialization
   - `cargo fmt` reformats multi-line `.with_context(|| { format!(...) })?` as `.with_context(|| format!(...))?` — write compact form to avoid fmt diffs
+---
+
+## 2026-03-29 - US-014
+Session: iter-50023e1a / loop-26ce4e61 iteration 14
+Review Outcome: PASS
+Trajectory: ON_TRACK
+Trajectory Notes: N/A
+Corrective Plan: N/A
+- Implemented `chronicle import` command in `src/cli/mod.rs`
+- `handle_import` delegates to `import_impl(agent, dry_run, config_path, home)`
+  — home is injected for testability (no real `$HOME` access in tests)
+- `ImportParams<'a>` struct bundles 10 params to satisfy clippy::too_many_arguments
+- `import_agent_sessions` core loop:
+  - Reads + sorts subdirs of source session directory for deterministic commit order
+  - Skips subdirs with no `.jsonl` files (no commit, no repo dir created)
+  - For each non-empty subdir: L1-canonicalizes dir name, L2/L3-canonicalizes
+    each file line by line, writes to repo working tree, stages all files, commits
+  - One commit per session directory (not per file, not one giant commit)
+- `--agent pi|claude|all` filter respects `agents.*.enabled` config flags
+- `--dry-run` skips `RepoManager::init_or_open` entirely; just prints plan
+- `ImportParams::manager: Option<&git::RepoManager>` — `None` in dry-run mode
+- 7 new tests: dry-run, writes to repo, L1 dir name canon, L2 content canon,
+  --agent pi-only, --agent claude-only, empty session dir skipped
+- 250 tests total; all passing; cargo fmt, clippy -D warnings, cargo deny pass
+- Files changed: `src/cli/mod.rs`
+- **Learnings for future iterations:**
+  - Dry-run commands must not create any filesystem side-effects — check `dry_run`
+    before any write, including repo initialization (`init_or_open` creates the dir)
+  - clippy::too_many_arguments fires at >7 args; bundle into a param struct
+  - `manager: Option<&T>` + `.expect("invariant")` is idiomatic when a field is
+    logically required but structurally optional (enforced at call site by control flow)
+  - `is_some_and(|ext| ext == "jsonl")` is preferred over `map_or(false, ...)` (clippy::unnecessary_map_or)
+  - Trailing newline must be explicitly preserved: `lines()` strips the final `\n`,
+    so check `raw.ends_with('\n')` and push it back after joining
+  - Staged repo-relative paths must use forward slashes on all target platforms
+    (Unix); `format!("{base}/{dir}/{file}")` is correct and safe here
 ---
