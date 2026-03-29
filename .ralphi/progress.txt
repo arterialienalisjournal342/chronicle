@@ -592,3 +592,47 @@ Corrective Plan: N/A
   - `write_sync_config` helper for tests needs pi_enabled + claude_enabled params to be
     flexible; simpler tests can reuse the existing `write_import_config` (no remote set)
 ---
+
+## 2026-03-29 - US-018
+Session: iter-1475a252 / loop-26ce4e61 iteration 18
+Review Outcome: PASS
+Trajectory: ON_TRACK
+Trajectory Notes: N/A
+Corrective Plan: N/A
+- Implemented `chronicle status`, `chronicle errors`, and `chronicle config` in `src/cli/mod.rs`
+- status: `handle_status` delegates to `status_impl(config_path, home)` (injected for tests)
+  - Shows machine name, config path, last sync (from manifest.json machines map), pending
+    local changes (scanner + state cache), remote URL, and per-agent enabled/session_dir
+  - `expand_home(path, home)` helper: tilde expansion with injected home dir (avoids real $HOME in tests)
+  - State cache load uses `unwrap_or_default()` — status is read-only, cache absence is non-fatal
+- errors: `handle_errors(limit)` delegates to `errors_impl(limit, errors_path)` (injected for tests)
+  - Reads `RingBuffer::read(limit)` and formats entries: `[timestamp] SEVERITY  category  file\n  message\n  detail: ...\n`
+  - Empty buffer prints "No errors recorded."
+  - Entry count suffix handles singular ("1 error shown.") vs plural
+- config: `handle_config(key, value)` delegates to `config_impl(key, value, config_path)`
+  - No args: print full TOML via `toml::to_string_pretty`
+  - Key only: `get_config_value(cfg, key)` via exhaustive match on dotted keys
+  - Key + value: `set_config_value(cfg, key, value)` + atomic write-back to config file
+  - Special `machine-name` alias (hyphens → underscores) maps to `general.machine_name`
+  - All config keys supported: general.*, notifications.*, storage.*, canonicalization.*,
+    agents.pi.*, agents.claude.*, sync.*
+  - `sync.history_mode` parses "full"/"partial" strings; other invalid values return error
+  - Unknown keys return `anyhow::bail!` error
+- 13 new unit tests: status_shows_machine_name, status_counts_pending, status_last_sync,
+  errors_no_entries, errors_shows_all, errors_limit, config_no_args, config_key_reads,
+  config_machine_name_alias_reads, config_key_value_sets, config_machine_name_alias_sets,
+  config_unknown_key_error, config_history_mode_roundtrip
+- 285 tests total; all passing; cargo fmt, clippy -D warnings, cargo deny all pass
+- Files changed: `src/cli/mod.rs`
+- **Learnings for future iterations:**
+  - `use dirs;` as a standalone `use` statement triggers clippy::single_component_path_imports;
+    use `dirs::some_fn()` directly (crate already in scope as an extern dep in Rust 2018+)
+  - `scan::StateCache` derives `Default` — `load(...).unwrap_or_default()` is idiomatic when
+    cache absence is non-fatal (e.g., status command)
+  - `git::MachineEntry` has `home_path: String` and `os: String` fields added in US-017 —
+    always check struct definition when constructing in tests to avoid E0063 missing fields
+  - `toml::to_string_pretty` serializes all fields; `cargo fmt` may reflow `format!` calls
+    differently — run `cargo fmt` (not just `--check`) after writing tests
+  - `expand_home(path, home)` vs `config::expand_path(path)`: the former uses an injected
+    home dir (for testing), the latter reads the real `dirs::home_dir()` at runtime
+---
