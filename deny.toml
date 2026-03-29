@@ -1,0 +1,91 @@
+# cargo-deny configuration for Chronicle
+# Install: cargo install cargo-deny
+# Run:     cargo deny check licenses
+# Run:     cargo deny check (all checks)
+
+[graph]
+# Target platforms Chronicle ships for (macOS + Linux, Windows deferred).
+targets = [
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+]
+
+[output]
+feature-depth = 1
+
+# ---------------------------------------------------------------------------
+# Security advisories  (`cargo deny check advisories`)
+# ---------------------------------------------------------------------------
+[advisories]
+# Ignore specific advisories only when triaged and accepted as low-risk.
+ignore = []
+
+# ---------------------------------------------------------------------------
+# License checks  (`cargo deny check licenses`)
+# ---------------------------------------------------------------------------
+[licenses]
+# Deny any license not in this list.
+allow = [
+    # Permissive
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "0BSD",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",         # Boost Software License
+    "CC0-1.0",         # Creative Commons Zero
+    "ISC",
+    "Unicode-3.0",     # Unicode Data Files license (icu_* crates)
+    "Unlicense",       # Public domain dedications (aho-corasick, memchr, etc.)
+    "Zlib",            # (bytemuck, miniz_oxide, etc.)
+
+    # File-level weak copyleft — acceptable for a binary since only
+    # modifications to MPL files must be released, not the whole application.
+    "MPL-2.0",
+]
+
+# How closely scanned license text must match the canonical SPDX text.
+confidence-threshold = 0.8
+
+# Per-crate overrides for licenses not allowed globally.
+exceptions = []
+
+# [[licenses.clarify]]
+# crate = "ring"
+# expression = "MIT AND ISC AND OpenSSL"
+# license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+[licenses.private]
+# Chronicle is not published to crates.io — ignore its own license in checks.
+ignore = true
+
+# ---------------------------------------------------------------------------
+# Duplicate-crate bans  (`cargo deny check bans`)
+# ---------------------------------------------------------------------------
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+deny = []
+skip = []
+skip-tree = []
+
+# ---------------------------------------------------------------------------
+# Source checks  (`cargo deny check sources`)
+# ---------------------------------------------------------------------------
+[sources]
+unknown-registry = "deny"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[sources.allow-org]
+github = []
+gitlab = []
+bitbucket = []
