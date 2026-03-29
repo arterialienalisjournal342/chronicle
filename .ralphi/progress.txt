@@ -223,3 +223,30 @@ Corrective Plan: N/A
   - L3_WARNING needs to be emitted by CLI sync/import commands (US-013/US-014/US-017)
     when config.canonicalization.level >= 3
 ---
+
+## 2026-03-29 - US-008
+Session: iter-9a1e110a / loop-26ce4e61 iteration 8
+Review Outcome: PASS
+Trajectory: ON_TRACK
+Trajectory Notes: N/A
+Corrective Plan: N/A
+- Implemented 30-entry error ring buffer (§11.1) in `src/errors/ring_buffer.rs`
+- `ErrorEntry` struct: timestamp (chrono::DateTime<Utc> with serde), severity (Severity enum: error|warning|info, lowercase), category (String), file (Option<String>, skipped when None), message (String), detail (Option<String>, skipped when None)
+- `RingBuffer` struct: path + capacity (30); `new(path)`, `default_path()`, `append()`, `read(limit)`, `clear()`
+- Atomic writes: entries serialized to `.errors.<pid>.<nanos>.tmp` then renamed via `fs::rename` (POSIX atomic within same filesystem)
+- Rotation: load existing entries, push new, drain oldest if len > capacity
+- `read(Some(n))`: `saturating_sub` to get start index, slice last N
+- `default_path()`: `dirs::data_local_dir()` → `~/.local/share/chronicle/errors.jsonl`
+- Parent directory auto-created via `fs::create_dir_all` on append/clear
+- serde_json errors converted to `std::io::Error` (via `IoError` variant in `ChronicleError`)
+- Updated `src/errors/mod.rs`: added `pub mod ring_buffer;`
+- 16 unit tests: read empty, append+read, order preserved, rotation at 31/100 entries, read limits (n, oversized, zero), clear, clear nonexistent, all 7 categories, file+detail round-trip, absent optional fields omitted in JSON, severity lowercase, default_path suffix, parent dir creation
+- Files changed: `src/errors/ring_buffer.rs` (new), `src/errors/mod.rs`
+- 169 tests total; all passing; cargo fmt, clippy -D warnings, cargo deny all pass
+- **Learnings for future iterations:**
+  - Atomic write via temp+rename is the standard POSIX pattern; temp file must be on same filesystem (same parent dir) for rename to be atomic — always use `parent.join(...)` not `/tmp/`
+  - `serde_json::Error` does not impl `From<serde_json::Error>` for `std::io::Error` directly; wrap with `std::io::Error::new(InvalidData, je.to_string())` then `?` converts via `ChronicleError::IoError`
+  - `skip_serializing_if = "Option::is_none"` on optional fields keeps JSON lean; deserialization with absent fields defaults to None automatically
+  - `dirs::data_local_dir()` on macOS returns `~/Library/Application Support`; on Linux returns `~/.local/share` — the XDG-compliant path per spec §11.1
+  - `ConflictReporter` from US-007 used `NullReporter` as placeholder; US-008 `RingBuffer` is the real impl to wire in when US-015/US-017/US-018 connect the merge pipeline to the ring buffer
+---
