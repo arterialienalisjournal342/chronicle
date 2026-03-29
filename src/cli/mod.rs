@@ -13,6 +13,7 @@ use crate::errors;
 use crate::git;
 use crate::merge::set_union::{merge_jsonl, NullReporter};
 use crate::scan;
+use crate::scheduler::cron as scheduler_cron;
 
 // ---------------------------------------------------------------------------
 // chronicle init
@@ -1941,20 +1942,67 @@ fn set_config_value(cfg: &mut config::Config, key: &str, value: &str) -> Result<
 // ---------------------------------------------------------------------------
 
 /// Handle `chronicle schedule install`.
+///
+/// Reads `sync_interval` from config, maps it to a cron expression, detects
+/// the current binary path, and writes/replaces the Chronicle crontab entries.
 pub fn handle_schedule_install() -> Result<()> {
-    println!("not implemented: schedule install");
+    let cfg =
+        config::load(None, &CliOverrides::default()).context("failed to load configuration")?;
+
+    let (cron_expr, warning) = scheduler_cron::interval_to_cron(&cfg.general.sync_interval);
+    if let Some(w) = warning {
+        eprintln!("Warning: {w}");
+    }
+
+    // Prefer the absolute path of the running binary; fall back to argv[0].
+    let binary_path = std::env::current_exe()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| {
+            std::env::args()
+                .next()
+                .unwrap_or_else(|| "chronicle".to_owned())
+        });
+
+    scheduler_cron::install(&binary_path, &cron_expr)
+        .context("failed to install crontab entries")?;
+
+    println!("✓ Chronicle cron entries installed.");
+    println!("  Binary:   {binary_path}");
+    println!("  Schedule: @reboot and {cron_expr}");
     Ok(())
 }
 
 /// Handle `chronicle schedule uninstall`.
+///
+/// Removes all `# chronicle-sync` tagged entries from the crontab.  If the
+/// crontab is empty after removal, it is deleted via `crontab -r`.
 pub fn handle_schedule_uninstall() -> Result<()> {
-    println!("not implemented: schedule uninstall");
+    scheduler_cron::uninstall().context("failed to remove crontab entries")?;
+    println!("✓ Chronicle cron entries removed.");
     Ok(())
 }
 
 /// Handle `chronicle schedule status`.
+///
+/// Reports whether Chronicle crontab entries are installed, the configured
+/// interval, the cron expression, and the path to the chronicle binary.
 pub fn handle_schedule_status() -> Result<()> {
-    println!("not implemented: schedule status");
+    let st = scheduler_cron::status().context("failed to read crontab")?;
+    if st.installed {
+        println!("Installed: yes");
+        println!("Interval:  {}", st.interval.as_deref().unwrap_or("unknown"));
+        println!(
+            "Cron:      {}",
+            st.cron_expression.as_deref().unwrap_or("unknown")
+        );
+        println!(
+            "Binary:    {}",
+            st.binary_path.as_deref().unwrap_or("unknown")
+        );
+    } else {
+        println!("Installed: no");
+        println!("Run 'chronicle schedule install' to set up automatic sync.");
+    }
     Ok(())
 }
 
