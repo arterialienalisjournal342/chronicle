@@ -183,6 +183,30 @@ Corrective Plan: N/A
   - Doc comments with long continuation lines (`///   ...`) must not over-indent; clippy::doc_overindented_list_items fires if continuation indentation > 2 spaces from `///`
 ---
 
+## 2026-03-29 - US-012
+Session: iter-29b0cc8b / loop-26ce4e61 iteration 12
+Review Outcome: PASS
+Trajectory: ON_TRACK
+Trajectory Notes: N/A
+Corrective Plan: N/A
+- Implemented git staging and commit message formatting per §6.4
+- Created src/git/commit.rs:
+  - `SyncSummary` struct: new_files, modified_files, pi_total, claude_total
+  - `format_sync_message(machine, timestamp, summary)` → "sync: machine @ ISO-timestamp\n\n+N files, ~M files (pi: P, claude: C)\n"
+  - `format_import_message(agent, machine, count)` → "import: agent sessions (machine)\n\nAdded N session file(s)\n" (singular/plural handled)
+  - `RepoManager::stage_files(repo_relative_paths)` — calls index.add_path for each, then index.write()
+  - `RepoManager::commit_if_staged(message, committer_name)` — writes index tree, compares with HEAD tree (or empty-tree OID for initial commit); returns None if nothing staged; creates commit with committer/author = committer_name <chronicle@local>
+- Updated src/git/mod.rs: added `mod commit` and pub re-exports for format functions + SyncSummary
+- 16 new unit tests covering all ACs; 235 tests total
+- Files changed: src/git/commit.rs (new), src/git/mod.rs
+- **Learnings for future iterations:**
+  - `git2::Oid::from_str("4b825dc642cb6eb9a060e54bf8d69288fbee4904")` creates the well-known empty-tree OID — reliable sentinel for "index is empty, initial commit case"
+  - `repo.head()` returns ErrorCode::UnbornBranch for repos with no commits yet — must match BOTH UnbornBranch and NotFound to handle all "no HEAD" cases safely
+  - `index.write_tree()` must be called before `repo.find_tree()` — the tree is only materialized when explicitly written from the index
+  - `parent_commit.into_iter().collect::<Vec<_>>()` is idiomatic for converting Option<Commit> → Vec<Commit> for the parents slice in `repo.commit`
+  - Paths passed to `index.add_path` must be repo-relative (not absolute); callers are responsible for computing the relative path
+  - `commit.committer().email()` and `.name()` return `Option<&str>` from git2; unwrap in tests is acceptable when we just created the commit and know the signature is valid UTF-8
+
 ## PRD Run Context
 PRD Branch: ralph/initial-delivery
 Started: 2026-03-29T02:25:06.047Z
@@ -325,4 +349,45 @@ Corrective Plan: N/A
   - US-011 (fetch/push) and US-012 (staging/commits) will add methods to RepoManager —
     they need access to `self.repo` (git2::Repository) and `self.repo_path`
   - `git2::Repository` does not implement `Debug`, so `RepoManager` cannot `#[derive(Debug)]`
+---
+
+## 2026-03-29 - US-011
+Session: iter-a1f92e78 / loop-26ce4e61 iteration 11
+Review Outcome: PASS
+Trajectory: ON_TRACK
+Trajectory Notes: N/A
+Corrective Plan: N/A
+- Implemented git fetch/push with exponential-backoff retry per §6.5
+- Created src/git/fetch_push.rs (new): RepoManager::fetch, RepoManager::push_head
+  (pub(crate)), RepoManager::push_with_retry, run_push_retry (pub(crate)),
+  is_network_error — split to separate file per spec directory layout
+- Updated src/git/mod.rs: GitError::PushRejected { refname, message },
+  GitError::PushExhausted { attempts }, PUSH_BACKOFF_SECS=[0,5,25],
+  PUSH_MAX_RETRIES=3, mod fetch_push + re-exports
+- push_head captures rejection via RemoteCallbacks::push_update_reference (inner
+  scope ensures borrow of rejection Option ends before it's read)
+- run_push_retry: initial attempt (no sleep), then up to 3 retries each with
+  sleep(backoff[i]) → on_rejection() → try_push(); returns PushExhausted after
+  exhaustion; returns immediately on network errors (Net/Http/Ssl/Ssh classes)
+- is_network_error checks git2::ErrorClass; ring buffer logging deferred to
+  US-017 (sync command), keeping git module independent of errors module
+- 20 new unit tests: is_network_error coverage, backoff timing (0s/5s/25s
+  asserted by vec comparison), exhaustion count (4 = 1 initial + 3 retries),
+  on_rejection propagation, network early-exit, git2 smoke tests with local
+  bare repos (push_head + fetch); 219 tests total
+- Files changed: src/git/fetch_push.rs (new), src/git/mod.rs
+- **Learnings for future iterations:**
+  - RemoteCallbacks::push_update_reference requires inner scope to ensure
+    the mutable borrow of the rejection Option ends before reading it after push
+  - `move` on a closure capturing `&mut T` moves the reference; borrow ends when
+    closure is dropped (end of inner scope) — then the owned value is accessible
+  - `clippy::double_must_use` fires when #[must_use] is on a fn returning
+    Result (already must_use); just omit the attribute
+  - `pub use` in a binary crate generates unused_imports if nothing in the crate
+    references the re-export; use #[allow(unused_imports)] for items that will
+    be wired in future stories
+  - git2::Error::new(ErrorCode, ErrorClass, msg) is public and usable in tests
+    to construct errors with specific classes for testing is_network_error
+  - Fetch with wildcard refspec "+refs/heads/*:refs/remotes/origin/*" works
+    correctly against a local bare repo that has been pushed to
 ---
