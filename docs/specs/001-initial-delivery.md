@@ -12,7 +12,7 @@
 
 AI coding agent session history (Pi, Claude Code) is stored locally under `$HOME`-relative paths. Users who work across multiple machines — where `$HOME` varies (`/Users/bradmatic`, `/Users/brad`, `/home/bradmatic`, `/home/brad`) — have no way to access or continue session history from another machine.
 
-Chronicle is a bidirectional sync daemon that keeps session history files synchronized across machines using a canonicalization layer that abstracts away per-machine path differences, with Git as the storage and transport backend.
+Chronicle is a bidirectional sync tool that keeps session history files synchronized across machines using a canonicalization layer that abstracts away per-machine path differences, with Git as the storage and transport backend. Scheduling is handled by cron — Chronicle itself is a stateless CLI that runs a sync cycle and exits.
 
 ---
 
@@ -48,7 +48,7 @@ Chronicle is a bidirectional sync daemon that keeps session history files synchr
 │              │                            │                     │
 │              ▼                            ▼                     │
 │     ┌────────────────────────────────────────────┐              │
-│     │           Chronicle Daemon                  │              │
+│     │           Chronicle (sync)                  │              │
 │     │  ┌──────────┐  ┌───────────┐  ┌──────────┐│              │
 │     │  │ Canonicalizer │  Merger  │  │ De-canon ││              │
 │     │  └──────────┘  └───────────┘  └──────────┘│              │
@@ -73,7 +73,7 @@ Chronicle is a bidirectional sync daemon that keeps session history files synchr
 │         └── session1.jsonl  (canonicalized content)             │
 │                          │                                      │
 │     ┌────────────────────┴───────────────────────┐              │
-│     │           Chronicle Daemon                  │              │
+│     │           Chronicle (sync)                  │              │
 │     └────────────────────┬───────────────────────┘              │
 │              ┌───────────┴────────────┐                         │
 │              ▼                        ▼                         │
@@ -86,14 +86,14 @@ Chronicle is a bidirectional sync daemon that keeps session history files synchr
 
 ### Data Flow — Outgoing (Local → Storage)
 
-1. Daemon detects new/changed `.jsonl` files in configured agent session directories
+1. `chronicle sync` (fired by cron) detects new/changed `.jsonl` files in configured agent session directories
 2. Canonicalizes file paths and file content (home paths → `{{SYNC_HOME}}` token)
 3. Writes canonicalized files to the Git working tree under canonical directory names
 4. Commits and pushes to remote
 
 ### Data Flow — Incoming (Storage → Local)
 
-1. Daemon pulls from remote
+1. Chronicle pulls from remote
 2. Merges any conflicts at the JSONL entry level (grow-only set)
 3. De-canonicalizes file paths and content (`{{SYNC_HOME}}` → local home path)
 4. Writes de-canonicalized files to the correct local agent session directories
@@ -355,7 +355,7 @@ If `git push` fails because the remote has advanced:
 
 1. Retry: `fetch` → re-merge → `commit` → `push`
 2. Maximum **3 retries** with exponential backoff: 0s, 5s, 25s
-3. After 3 failures: log error to ring buffer, emit notification (if enabled), wait for next sync cycle
+3. After 3 failures: log error to ring buffer, wait for next cron-scheduled sync cycle
 
 ### 6.6 Initial Import
 
@@ -366,7 +366,7 @@ The `chronicle import` command performs a one-time import of all existing sessio
 3. Commit **one commit per agent session directory** for atomicity and readable git history
 4. Push all commits
 
-This is separate from the ongoing daemon sync cycle and is intended to be run once during setup.
+This is separate from the ongoing cron-scheduled sync cycle and is intended to be run once during setup.
 
 ---
 
@@ -417,7 +417,7 @@ XDG-compliant. Respects `$XDG_CONFIG_HOME` if set.
 # Machine identity — auto-generated on `chronicle init`, retrievable via `chronicle config machine-name`
 machine_name = "cheerful-chinchilla"
 
-# Sync interval for the daemon timer
+# Sync interval (used by `chronicle schedule install` to set cron frequency)
 sync_interval = "5m"
 
 # Log level: trace, debug, info, warn, error
@@ -428,9 +428,9 @@ log_level = "info"
 follow_symlinks = false
 
 [notifications]
-# Notify on sync errors (OS-native notification)
+# Log sync errors to stderr (visible in cron mail if configured)
 on_error = true
-# Notify on every successful sync
+# Log every successful sync to stderr
 on_success = false
 
 [storage]
@@ -522,7 +522,7 @@ One-time bulk import of existing session files into the canonical store. Scans c
 ```
 chronicle sync [--dry-run]
 ```
-Single sync cycle: pull → merge → push → de-canonicalize → write local. This is the command the OS-native timer invokes.
+Single sync cycle: pull → merge → push → de-canonicalize → write local. This is the command that cron invokes on a schedule.
 
 ---
 
@@ -570,25 +570,31 @@ Special keys:
 ---
 
 ```
-chronicle daemon start
+chronicle schedule install
 ```
-Install and start the OS-native timer:
-- **macOS:** Creates and loads a `launchd` plist at `~/Library/LaunchAgents/tools.chronicle.sync.plist`
-- **Linux:** Creates and enables a systemd user timer at `~/.config/systemd/user/chronicle-sync.timer` + `.service`
+Install a crontab entry that runs `chronicle sync --quiet` at the interval specified by `sync_interval` in config (default: every 5 minutes). Also installs an `@reboot` entry so syncing resumes after a restart.
+
+The installed crontab entries are tagged with a comment marker (`# chronicle-sync`) for reliable identification:
+```
+@reboot /usr/local/bin/chronicle sync --quiet  # chronicle-sync
+*/5 * * * * /usr/local/bin/chronicle sync --quiet  # chronicle-sync
+```
+
+If entries already exist, they are updated in place (interval may have changed). The command auto-detects the chronicle binary path.
 
 ---
 
 ```
-chronicle daemon stop
+chronicle schedule uninstall
 ```
-Stop and uninstall the OS-native timer.
+Remove all chronicle crontab entries (identified by the `# chronicle-sync` marker).
 
 ---
 
 ```
-chronicle daemon status
+chronicle schedule status
 ```
-Report whether the timer is installed and running, last fire time, next scheduled fire.
+Report whether the crontab entries are installed, the configured interval, and the path to the chronicle binary in the crontab.
 
 ---
 
@@ -602,83 +608,78 @@ Report whether the timer is installed and running, last fire time, next schedule
 
 ---
 
-## 10. Daemon Lifecycle
+## 10. Scheduling
 
-### 10.1 macOS (launchd)
+### 10.1 Cron-Based Scheduling
 
-Plist installed at `~/Library/LaunchAgents/tools.chronicle.sync.plist`:
+Chronicle uses cron for scheduling on both macOS and Linux. `chronicle sync` is a stateless CLI command — cron fires it on a schedule, it runs a single sync cycle, and exits.
 
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>tools.chronicle.sync</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/local/bin/chronicle</string>
-        <string>sync</string>
-    </array>
-    <key>StartInterval</key>
-    <integer>300</integer>
-    <key>StandardOutPath</key>
-    <string>/tmp/chronicle-sync.out.log</string>
-    <key>StandardErrorPath</key>
-    <string>/tmp/chronicle-sync.err.log</string>
-    <key>RunAtLoad</key>
-    <true/>
-</dict>
-</plist>
+`chronicle schedule install` writes two entries to the user's crontab:
+
+```crontab
+@reboot /usr/local/bin/chronicle sync --quiet  # chronicle-sync
+*/5 * * * * /usr/local/bin/chronicle sync --quiet  # chronicle-sync
 ```
 
-The `StartInterval` value is derived from `sync_interval` in config.
+The `# chronicle-sync` comment marker allows `chronicle schedule uninstall` and `chronicle schedule status` to reliably identify and manage these entries without touching other crontab lines.
 
-### 10.2 Linux (systemd user units)
+### 10.2 Interval Mapping
 
-Timer at `~/.config/systemd/user/chronicle-sync.timer`:
-```ini
-[Unit]
-Description=Chronicle session sync timer
+The `sync_interval` config value is mapped to a cron expression:
 
-[Timer]
-OnBootSec=1min
-OnUnitActiveSec=5min
-Persistent=true
+| `sync_interval` | Cron expression | Notes |
+|-----------------|----------------|-------|
+| `1m` | `* * * * *` | Every minute (minimum cron granularity) |
+| `5m` (default) | `*/5 * * * *` | Every 5 minutes |
+| `10m` | `*/10 * * * *` | Every 10 minutes |
+| `15m` | `*/15 * * * *` | Every 15 minutes |
+| `30m` | `*/30 * * * *` | Every 30 minutes |
+| `1h` | `0 * * * *` | Every hour |
 
-[Install]
-WantedBy=timers.target
-```
+Values that don't map cleanly to cron (e.g., `7m`) are rounded down to the nearest cron-compatible interval and a warning is emitted.
 
-Service at `~/.config/systemd/user/chronicle-sync.service`:
-```ini
-[Unit]
-Description=Chronicle session sync
+### 10.3 Crontab Management
 
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/chronicle sync
-```
+The `schedule install` command:
 
-`OnUnitActiveSec` derived from `sync_interval`.
+1. Reads the current crontab (`crontab -l`)
+2. Removes any existing lines with the `# chronicle-sync` marker
+3. Appends the new `@reboot` and interval entries
+4. Writes the updated crontab (`crontab -`)
+5. Prints confirmation with the installed schedule
 
-### 10.3 Logging
+The `schedule uninstall` command:
 
-The daemon logs to OS-native facilities:
-- **macOS:** stdout/stderr captured by launchd (viewable via `log show --predicate 'process == "chronicle"'` or the redirect files)
-- **Linux:** journald (viewable via `journalctl --user -u chronicle-sync`)
+1. Reads the current crontab
+2. Removes all lines with the `# chronicle-sync` marker
+3. Writes the updated crontab
+4. Prints confirmation
 
-### 10.4 Notifications
+If the crontab is empty after removal, the crontab is deleted (`crontab -r`).
 
-OS-native desktop notifications:
+### 10.4 Logging
 
-- **macOS:** `osascript -e 'display notification ...'` or `terminal-notifier` if available
-- **Linux:** `notify-send` (freedesktop.org notification spec)
+Since `chronicle sync` is a regular CLI invocation:
 
-Controlled by `[notifications]` config:
-- `on_error = true` (default): Notification on sync failures
-- `on_success = false` (default): Notification on every successful sync (opt-in)
+- **stdout/stderr** go to cron's default mail handling (typically local mail, or `/dev/null` if `MAILTO=""` is set)
+- The `--quiet` flag suppresses stdout on success; only errors go to stderr
+- All sync activity is also recorded in the error ring buffer (§11.1) for `chronicle errors` to display
+- For richer log inspection, users can redirect cron output to a file:
+  ```
+  */5 * * * * /usr/local/bin/chronicle sync --quiet 2>> ~/.local/share/chronicle/sync.log
+  ```
+
+### 10.5 Why Cron
+
+Cron was chosen over platform-native schedulers (launchd, systemd) because:
+
+- **Single code path** for both macOS and Linux — no platform-specific plist/unit file generation
+- **Zero build complexity** — no XML templating, no INI generation, no platform feature flags
+- **Familiar to the target audience** — developers who use AI coding agents know cron
+- **Debuggable** — `crontab -l` is simpler than `launchctl list` + `journalctl --user`
+- **Sufficient reliability** — for a 5-minute sync interval on a developer workstation, cron's guarantees are adequate
+
+Platform-native schedulers (launchd, systemd, Task Scheduler) may be added as an option in a future release if users need tighter OS integration (e.g., wake-from-sleep triggers, energy scheduling).
 
 ---
 
@@ -730,8 +731,8 @@ If a write to the git working tree fails:
 If `git fetch` or `git push` fails due to network:
 1. Log the error
 2. Skip the current sync cycle
-3. Retry on next timer fire
-4. Do NOT retry immediately (the timer interval already handles retry cadence)
+3. Retry on next cron-scheduled run
+4. Do NOT retry immediately (the cron interval already handles retry cadence)
 
 ### 11.4 Permission Errors
 
@@ -786,7 +787,7 @@ chronicle/
 │   │   ├── status.rs
 │   │   ├── errors.rs
 │   │   ├── config.rs
-│   │   └── daemon.rs
+│   │   └── schedule.rs
 │   ├── config/
 │   │   ├── mod.rs                 # Config loading, validation, precedence
 │   │   ├── schema.rs              # Serde structs for config.toml
@@ -812,11 +813,9 @@ chronicle/
 │   │   ├── mod.rs
 │   │   ├── pi.rs                  # Pi-specific: dir encoding, file naming, schema knowledge
 │   │   └── claude.rs              # Claude-specific: dir encoding, file naming, schema knowledge
-│   ├── daemon/
+│   ├── scheduler/
 │   │   ├── mod.rs
-│   │   ├── launchd.rs             # macOS plist generation and management
-│   │   ├── systemd.rs             # Linux timer/service generation and management
-│   │   └── notify.rs              # OS-native notifications
+│   │   └── cron.rs                # Crontab read/write/install/uninstall
 │   ├── errors/
 │   │   ├── mod.rs
 │   │   ├── ring_buffer.rs         # 30-entry error ring buffer (JSONL file)
@@ -836,7 +835,6 @@ chronicle/
 | `git2` (`libgit2` bindings) | Git operations (prefer over shelling out) |
 | `chrono` | Timestamp parsing and comparison |
 | `dirs` | XDG-compliant directory resolution |
-| `notify-rust` | Linux desktop notifications |
 | `uuid` | Session UUID generation |
 | `rand` | Machine name generation |
 | `tracing` | Structured logging |
@@ -981,7 +979,8 @@ Using `proptest` or `quickcheck`:
 ## 16. Future Considerations (Not in MVP)
 
 - **Deletion propagation:** Tombstone mechanism for intentional session removal
-- **Windows support:** Different daemon model (Task Scheduler), different path separators
+- **Windows support:** Task Scheduler integration (cron unavailable), different path separators
+- **Platform-native scheduling:** Optional launchd (macOS) / systemd (Linux) integration for tighter OS hooks (wake-from-sleep, energy scheduling)
 - **Encryption at rest:** Encrypt session content before committing to git (GPG or age)
 - **Multiple remotes:** Sync to more than one git remote for redundancy
 - **Web UI:** Browse synced session history in a browser
