@@ -1,0 +1,31 @@
+[package]
+name = "chronicle"
+version = "0.1.0"
+edition = "2021"
+description = "Bidirectional sync for AI coding agent session history across machines"
+license = "MIT"
+authors = ["Brad Campbell"]
+repository = "ssh://git@git.bradleyscampbell.net:10022/geekmuse/chronicle.git"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+dirs = "6"
+git2 = "0.19"
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+proptest = "1"
+tempfile = "3"
+
+[profile.release]
+strip = true
+lto = true
