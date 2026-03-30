@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+## [0.2.1] - 2026-03-29
+
+### Fixed
+- SSH authentication for remote Git operations — libgit2 requires an explicit
+  credentials callback; now tries SSH agent first, then falls back to
+  `~/.ssh/id_ed25519`, `~/.ssh/id_ecdsa`, `~/.ssh/id_rsa`
+
 ## [0.2.0] - 2026-03-29
 
 ### Added
@@ -46,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Project initialized
 
-[Unreleased]: https://github.com/YOUR_USERNAME/chronicle/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/YOUR_USERNAME/chronicle/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/YOUR_USERNAME/chronicle/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/YOUR_USERNAME/chronicle/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/YOUR_USERNAME/chronicle/releases/tag/v0.1.0
