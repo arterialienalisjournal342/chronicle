@@ -67,8 +67,11 @@ fn make_auth_callbacks<'cb>() -> git2::RemoteCallbacks<'cb> {
         }
 
         Err(git2::Error::from_str(
-            "no credentials available: ensure ssh-agent is running or \
-             a key exists at ~/.ssh/id_ed25519, ~/.ssh/id_ecdsa, or ~/.ssh/id_rsa",
+            "no credentials available: ensure ssh-agent is running with your \
+             key loaded, or a plain (unencrypted) key exists at \
+             ~/.ssh/id_ed25519, ~/.ssh/id_ecdsa, or ~/.ssh/id_rsa. \
+             Note: passphrase-protected keys must be loaded into ssh-agent \
+             first — Chronicle cannot prompt for a passphrase",
         ))
     });
 
