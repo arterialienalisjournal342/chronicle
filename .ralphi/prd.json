@@ -41,8 +41,8 @@
       ],
       "notes": "Audit refs: H-1 (src/cli/mod.rs:1668), H-3 (src/cli/mod.rs:622,905,1133), M-5 (src/scan/mod.rs:82–90)",
       "startedAt": "2026-03-30T03:15:16.807Z",
-      "updatedAt": "2026-03-30T03:24:00.000Z",
-      "completedAt": "2026-03-30T03:24:00.000Z"
+      "updatedAt": "2026-03-30T03:25:36.311Z",
+      "completedAt": "2026-03-30T03:25:36.311Z"
     },
     {
       "id": "US-003",
@@ -56,9 +56,12 @@
         "cargo test && cargo clippy -- -D warnings && cargo fmt --check pass"
       ],
       "priority": 3,
-      "status": "open",
+      "status": "done",
       "dependsOn": [],
-      "notes": "Audit refs: H-4 (src/agents/mod.rs:147–156), M-9 (src/git/fetch_push.rs:56–58)"
+      "notes": "Audit refs: H-4 (src/agents/mod.rs:147–156), M-9 (src/git/fetch_push.rs:56–58)",
+      "startedAt": "2026-03-30T03:25:36.546Z",
+      "updatedAt": "2026-03-30T03:35:41.882Z",
+      "completedAt": "2026-03-30T03:35:41.882Z"
     },
     {
       "id": "US-004",
@@ -72,13 +75,16 @@
         "cargo test && cargo clippy -- -D warnings && cargo fmt --check pass"
       ],
       "priority": 4,
-      "status": "open",
+      "status": "done",
       "dependsOn": [
         "US-001",
         "US-002",
         "US-003"
       ],
-      "notes": "Audit ref: M-7. This touches every .rs file so should run after code changes in US-001–003 to avoid merge conflicts."
+      "notes": "Audit ref: M-7. This touches every .rs file so should run after code changes in US-001–003 to avoid merge conflicts.",
+      "startedAt": "2026-03-30T03:35:42.243Z",
+      "updatedAt": "2026-03-30T03:50:00.000Z",
+      "completedAt": "2026-03-30T03:50:00.000Z"
     },
     {
       "id": "US-005",

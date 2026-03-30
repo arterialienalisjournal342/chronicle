@@ -29,6 +29,38 @@ Corrective Plan: N/A
   - `cargo fmt` applies changes in-place; the subsequent `cargo fmt --check` may show stale output if run from the same shell pipeline — run it as a separate command
   - `as_nanos()` returns `u128` (full nanos since epoch); the `{nanos}` format spec works fine with `u128` in format strings
 
+## 2026-03-29 - US-003
+Session: iter-39b82cad / loop-870a21db / iteration 3
+Review Outcome: PASS
+Trajectory: ON_TRACK
+Trajectory Notes: N/A
+Corrective Plan: N/A
+- Added lossiness warning to `Agent::decode_dir` trait doc explaining ClaudeAgent is lossy (both '/' and '.' encode to '-')
+- Expanded `ClaudeAgent::decode_dir` inline comment with a ⚠ LOSSY DECODE block explaining the double-slash artifact
+- Added `tracing::warn!` in `ClaudeAgent::decode_dir` when decoded path contains '//' to surface lossiness at runtime
+- Added test `claude_decode_lossy_dot_path_produces_double_slash` verifying dot-containing paths produce '//' in decoded output
+- Updated SSH key fallback error message in `make_auth_callbacks` to mention passphrase-protected keys require ssh-agent
+- Files changed: `src/agents/mod.rs`, `src/git/fetch_push.rs`
+- Committed: `feat(agents): US-003 - Document Claude decode_dir lossiness and improve SSH auth error message` (165b12f)
+- **Learnings for future iterations:**
+  - `tracing::warn!` with structured fields compiles fine in modules that don't already import tracing — no explicit `use tracing` needed (macro resolves via full path)
+  - The `//` double-slash artefact is the canonical signal for Claude decode_dir lossiness; future callers should check `path.to_string_lossy().contains("//")` to detect ambiguous decodes
+
+## 2026-03-29 - US-004
+Session: iter-4e42ce01 / loop-870a21db / iteration 4
+Review Outcome: PASS
+Trajectory: ON_TRACK
+Trajectory Notes: N/A
+Corrective Plan: N/A
+- Removed all 16 `#![allow(dead_code)]` blanket attributes from every source module
+- No targeted `#[allow(dead_code)]` replacements were needed — all items are either public (Rust does not flag `pub` items in `pub` modules as dead code in a library crate) or actively used
+- Files changed: src/lib.rs, src/agents/mod.rs, src/canon/fields.rs, src/canon/levels.rs, src/canon/mod.rs, src/config/machine_name.rs, src/config/mod.rs, src/config/schema.rs, src/errors/mod.rs, src/errors/ring_buffer.rs, src/git/commit.rs, src/git/fetch_push.rs, src/git/mod.rs, src/merge/entry.rs, src/merge/set_union.rs, src/scan/mod.rs
+- Committed: `refactor: US-004 - Remove #![allow(dead_code)] blankets from all modules` (622cd6c)
+- **Learnings for future iterations:**
+  - Rust dead_code lint does NOT fire for `pub` items in `pub` modules of a library crate (they're considered reachable API surface). Blanket `#![allow(dead_code)]` in lib-crate modules is almost always unnecessary for public items.
+  - When blanket allows are pre-emptive (added before code is wired), removing them once the code is wired may produce zero warnings — confirming the code is fully integrated.
+---
+
 ## PRD Run Context
 PRD Branch: ralph/audit-fixes
 Started: 2026-03-30T03:07:01.884Z
