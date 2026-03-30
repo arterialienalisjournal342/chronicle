@@ -13,6 +13,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+## [0.3.0] - 2026-03-30
+
+### Added
+- **Crate-level documentation** — `src/lib.rs` now carries a full `//!` doc block
+  describing Chronicle's purpose and module layout (`cargo doc` is now useful)
+- **`StateCache::path_for_repo`** — new helper co-locates the state cache with
+  the repo so multiple Chronicle installs are always isolated from one another
+- **`RingBuffer::path_for_repo`** — same isolation applied to the error ring
+  buffer; `sync_impl`, `push_impl`, and `pull_impl` now derive the ring buffer
+  path from `storage.repo_path` instead of the global XDG default
+
+### Fixed
+- **`canonicalization.level` range validation** — values outside `1–3` are now
+  rejected at both the serde deserialization layer and `chronicle config set`
+- **`status_impl` branch** — `chronicle status` now reads `cfg.storage.branch`
+  instead of the hardcoded `"main"` when opening the git repo
+- **State cache temp filename collision** — `StateCache::save` now uses full
+  nanoseconds since epoch (matching `RingBuffer::write_atomic`) instead of
+  `subsec_nanos` which wraps every second
+- **`push_impl` manifest** — `chronicle push` now writes and stages
+  `manifest.json` so `last_sync` is recorded for push-only users
+- **`push_with_retry` on_rejection** — the retry closure in `push_impl` now
+  performs a real `fetch` + `integrate_remote_changes` cycle so retries can
+  actually resolve divergence (previously a no-op)
+- **Claude `decode_dir` lossiness** — double-slash paths produced by the lossy
+  `/` + `.` → `-` encoding now emit a `tracing::warn!` at runtime
+
+### Changed
+- **`StateCache::default_path` deprecated** — replaced by `path_for_repo` in
+  all production call sites; marked `#[deprecated(since = "0.2.2")]`
+- **Dead-code blankets removed** — all `#![allow(dead_code)]` module-level
+  attributes removed now that all 21 delivery stories are complete
+- **`expand_path` / `expand_home` consolidated** — `config::expand_path_with_home`
+  is now the single implementation; `config::expand_path` delegates to it and
+  all CLI impls accept an injected home parameter for full testability
+
 ## [0.2.4] - 2026-03-30
 
 ### Fixed
@@ -80,7 +116,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Project initialized
 
-[Unreleased]: https://github.com/YOUR_USERNAME/chronicle/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/YOUR_USERNAME/chronicle/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/YOUR_USERNAME/chronicle/compare/v0.2.4...v0.3.0
 [0.2.4]: https://github.com/YOUR_USERNAME/chronicle/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/YOUR_USERNAME/chronicle/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/YOUR_USERNAME/chronicle/compare/v0.2.1...v0.2.2
