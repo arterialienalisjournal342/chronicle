@@ -683,7 +683,10 @@ mod tests {
     }
 
     fn make_bare_remote(dir: &TempDir) -> git2::Repository {
-        git2::Repository::init_bare(dir.path()).expect("init bare repo")
+        let mut opts = git2::RepositoryInitOptions::new();
+        opts.bare(true);
+        opts.initial_head("main");
+        git2::Repository::init_opts(dir.path(), &opts).expect("init bare repo")
     }
 
     #[test]

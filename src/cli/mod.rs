@@ -2740,7 +2740,12 @@ mod tests {
         let claude_sessions = dir.path().join("claude_sessions");
         let config_path = dir.path().join("config.toml");
 
-        git2::Repository::init_bare(&remote_path).unwrap();
+        {
+            let mut opts = git2::RepositoryInitOptions::new();
+            opts.bare(true);
+            opts.initial_head("main");
+            git2::Repository::init_opts(&remote_path, &opts).unwrap();
+        }
 
         // Create a Pi session file with a home path in its content.
         let session_dir = pi_sessions.join(pi_session_dir_name(&home));
@@ -2801,7 +2806,12 @@ mod tests {
         let claude_sessions = dir.path().join("claude_sessions");
         let config_path = dir.path().join("config.toml");
 
-        git2::Repository::init_bare(&remote_path).unwrap();
+        {
+            let mut opts = git2::RepositoryInitOptions::new();
+            opts.bare(true);
+            opts.initial_head("main");
+            git2::Repository::init_opts(&remote_path, &opts).unwrap();
+        }
 
         let session_dir = pi_sessions.join(pi_session_dir_name(&home));
         std::fs::create_dir_all(&session_dir).unwrap();
@@ -2848,7 +2858,12 @@ mod tests {
         let claude_sessions = dir.path().join("claude_sessions");
         let config_path = dir.path().join("config.toml");
 
-        git2::Repository::init_bare(&remote_path).unwrap();
+        {
+            let mut opts = git2::RepositoryInitOptions::new();
+            opts.bare(true);
+            opts.initial_head("main");
+            git2::Repository::init_opts(&remote_path, &opts).unwrap();
+        }
 
         let session_dir = pi_sessions.join(pi_session_dir_name(&home));
         std::fs::create_dir_all(&session_dir).unwrap();
@@ -3305,7 +3320,12 @@ mod tests {
         let claude_sessions = dir.path().join("claude_sessions");
         let config_path = dir.path().join("config.toml");
 
-        git2::Repository::init_bare(&remote_path).unwrap();
+        {
+            let mut opts = git2::RepositoryInitOptions::new();
+            opts.bare(true);
+            opts.initial_head("main");
+            git2::Repository::init_opts(&remote_path, &opts).unwrap();
+        }
 
         let session_dir = pi_sessions.join(pi_session_dir_name(&home));
         std::fs::create_dir_all(&session_dir).unwrap();
@@ -3362,7 +3382,12 @@ mod tests {
         let claude_sessions = dir.path().join("claude_sessions");
         let config_path = dir.path().join("config.toml");
 
-        git2::Repository::init_bare(&remote_path).unwrap();
+        {
+            let mut opts = git2::RepositoryInitOptions::new();
+            opts.bare(true);
+            opts.initial_head("main");
+            git2::Repository::init_opts(&remote_path, &opts).unwrap();
+        }
 
         // Session file triggers an outgoing commit; manifest is committed alongside it.
         let session_dir = pi_sessions.join(pi_session_dir_name(&home));
@@ -3415,7 +3440,12 @@ mod tests {
         let claude_sessions = dir.path().join("claude_sessions");
         let config_path = dir.path().join("config.toml");
 
-        git2::Repository::init_bare(&remote_path).unwrap();
+        {
+            let mut opts = git2::RepositoryInitOptions::new();
+            opts.bare(true);
+            opts.initial_head("main");
+            git2::Repository::init_opts(&remote_path, &opts).unwrap();
+        }
 
         let session_dir = pi_sessions.join(pi_session_dir_name(&home));
         std::fs::create_dir_all(&session_dir).unwrap();
@@ -3457,7 +3487,12 @@ mod tests {
         let claude_sessions = dir.path().join("claude_sessions");
         let config_path = dir.path().join("config.toml");
 
-        git2::Repository::init_bare(&remote_path).unwrap();
+        {
+            let mut opts = git2::RepositoryInitOptions::new();
+            opts.bare(true);
+            opts.initial_head("main");
+            git2::Repository::init_opts(&remote_path, &opts).unwrap();
+        }
 
         let session_dir = pi_sessions.join(pi_session_dir_name(&home));
         std::fs::create_dir_all(&session_dir).unwrap();

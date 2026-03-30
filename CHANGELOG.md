@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+## [0.2.3] - 2026-03-30
+
+### Fixed
+- **Cron SSH agent visibility** — crontab entries now inject `SSH_AUTH_SOCK` discovery so that `ssh_key_from_agent()` can reach the user's SSH agent from the minimal cron environment (macOS: `launchctl getenv`, Linux: systemd socket fallback)
+- **Binary path parsing** — `parse_installed_binary` now locates the chronicle binary by finding the token before `"sync"` instead of relying on a fixed positional index, making it resilient to the `SSH_AUTH_SOCK` prefix
+- **Test bare-repo branch name** — bare remotes in tests now explicitly set `initial_head("main")` so tests pass on systems where git defaults to `master`
+
 ## [0.2.2] - 2026-03-29
 
 ### Fixed
@@ -68,7 +75,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Project initialized
 
-[Unreleased]: https://github.com/YOUR_USERNAME/chronicle/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/YOUR_USERNAME/chronicle/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/YOUR_USERNAME/chronicle/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/YOUR_USERNAME/chronicle/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/YOUR_USERNAME/chronicle/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/YOUR_USERNAME/chronicle/compare/v0.1.0...v0.2.0

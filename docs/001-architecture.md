@@ -74,7 +74,7 @@ Chronicle is a Rust CLI tool that synchronizes AI coding agent session history (
 | Git as storage backend | Content-addressed, distributed, users already have remotes | — |
 | Grow-only CRDT merge | Session files are append-only; set-union is commutative, associative, idempotent | — |
 | `{{SYNC_HOME}}` token | Visually distinct, doesn't conflict with shell/markdown/regex | — |
-| Cron for scheduling | Single cross-platform code path for macOS + Linux, zero build complexity | — |
+| Cron for scheduling | Single cross-platform code path for macOS + Linux, zero build complexity; entries inject `SSH_AUTH_SOCK` for agent visibility | — |
 | `git2` (libgit2) over CLI | No system git dependency, programmatic error handling, explicit SSH agent credentials callback | — |
 
 > For detailed decision records, see [`docs/adrs/`](adrs/).
