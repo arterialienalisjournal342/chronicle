@@ -557,17 +557,20 @@ pub fn sync_impl(dry_run: bool, quiet: bool, config_path: &Path, home: &Path) ->
             is_pi: c.is_pi,
         }) {
             Ok(Some(pushed)) => {
-                if is_new {
-                    total_new += 1;
-                } else {
-                    total_modified += 1;
-                }
-                if c.is_pi {
-                    pi_staged.push(pushed.staged_rel);
-                } else {
-                    claude_staged.push(pushed.staged_rel);
-                }
+                // Always cache — prevents re-scanning on the next run.
                 cache_updates.push((pushed.cache_key, pushed.file_state));
+                if pushed.stage {
+                    if is_new {
+                        total_new += 1;
+                    } else {
+                        total_modified += 1;
+                    }
+                    if c.is_pi {
+                        pi_staged.push(pushed.staged_rel);
+                    } else {
+                        claude_staged.push(pushed.staged_rel);
+                    }
+                }
             }
             Ok(None) => {}
             Err(e) => eprintln!("  Warning: skipping {}: {e}", c.entry.path.display()),
@@ -868,19 +871,22 @@ pub fn push_impl(dry_run: bool, config_path: &Path, home: &Path) -> Result<()> {
             is_pi: c.is_pi,
         }) {
             Ok(Some(pushed)) => {
-                if is_new {
-                    total_new += 1;
-                } else {
-                    total_modified += 1;
-                }
-                if c.is_pi {
-                    pi_staged.push(pushed.staged_rel);
-                } else {
-                    claude_staged.push(pushed.staged_rel);
-                }
+                // Always cache — prevents re-scanning on the next run.
                 cache_updates.push((pushed.cache_key, pushed.file_state));
+                if pushed.stage {
+                    if is_new {
+                        total_new += 1;
+                    } else {
+                        total_modified += 1;
+                    }
+                    if c.is_pi {
+                        pi_staged.push(pushed.staged_rel);
+                    } else {
+                        claude_staged.push(pushed.staged_rel);
+                    }
+                }
             }
-            Ok(None) => {} // no net change — repo already has this content
+            Ok(None) => {} // file directly in source_dir (no session subdir) — skip
             Err(e) => {
                 eprintln!("  Warning: skipping {}: {e}", c.entry.path.display());
             }
@@ -987,14 +993,21 @@ struct ScannedChange {
     is_pi: bool,
 }
 
-/// The result of successfully writing one file to the repo working tree.
+/// The result of processing one file during a push.
 struct PushedFile {
     /// Repo-relative path of the written file (used for staging).
+    /// Ignored when `stage` is `false`.
     staged_rel: PathBuf,
     /// State-cache key — the file's absolute local path string.
     cache_key: String,
-    /// Updated state to record after a successful push.
+    /// Updated state to record in the state cache.
     file_state: scan::FileState,
+    /// Whether this file should be staged for a git commit.
+    ///
+    /// `false` when the repo already contained identical content — the file
+    /// still needs to be cached so future scans classify it as `Unchanged`
+    /// and skip re-processing it.
+    stage: bool,
 }
 
 /// Parameters for [`process_push_file`].
@@ -1099,9 +1112,22 @@ fn process_push_file(p: &PushFileParams<'_>) -> Result<Option<PushedFile>> {
             &staged_rel,
             &NullReporter,
         );
-        // If the merged result equals what is already in the repo, skip staging.
+        // If the merged result equals what is already in the repo, don't stage —
+        // but DO return a cache entry so future scans see this file as Unchanged.
         if out.content == repo_content {
-            return Ok(None);
+            let cache_key = entry.path.to_string_lossy().into_owned();
+            let file_state = scan::FileState {
+                local_mtime: entry.mtime,
+                local_size: entry.size,
+                last_synced_size: entry.size,
+                local_path: entry.path.clone(),
+            };
+            return Ok(Some(PushedFile {
+                staged_rel: PathBuf::new(),
+                cache_key,
+                file_state,
+                stage: false,
+            }));
         }
         out.content
     } else {
@@ -1128,6 +1154,7 @@ fn process_push_file(p: &PushFileParams<'_>) -> Result<Option<PushedFile>> {
         staged_rel,
         cache_key,
         file_state,
+        stage: true,
     }))
 }
 
