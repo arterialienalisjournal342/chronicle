@@ -284,9 +284,9 @@ advisory URL.
 ---
 
 #### L-7 · `other` · `Cargo.toml`, `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`
-**`YOUR_USERNAME` placeholder throughout**
+**`geekmuse` placeholder throughout**
 
-The GitHub URL placeholder `YOUR_USERNAME` needs to be replaced before
+The GitHub URL placeholder `geekmuse` needs to be replaced before
 open-sourcing. This was flagged previously but not yet actioned.
 
 **Suggested fix:** Global find-replace once the GitHub org/handle is chosen.
