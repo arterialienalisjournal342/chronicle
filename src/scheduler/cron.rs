@@ -125,11 +125,30 @@ pub fn filter_marker_lines(lines: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// Shell snippet that discovers `SSH_AUTH_SOCK` at runtime so that the
+/// `ssh_key_from_agent()` credential callback can reach the user's SSH agent
+/// from within a cron job (which runs in a minimal environment).
+///
+/// - **macOS:** `launchctl getenv SSH_AUTH_SOCK` returns the socket path
+///   registered by the system launch agent.
+/// - **Linux:** Falls back to the well-known systemd user socket at
+///   `/run/user/<uid>/ssh-agent.socket` when `SSH_AUTH_SOCK` is unset.
+#[cfg(target_os = "macos")]
+const SSH_AGENT_ENV: &str = "SSH_AUTH_SOCK=$(launchctl getenv SSH_AUTH_SOCK 2>/dev/null) ";
+
+#[cfg(not(target_os = "macos"))]
+const SSH_AGENT_ENV: &str =
+    r#"SSH_AUTH_SOCK="${SSH_AUTH_SOCK:-/run/user/$(id -u)/ssh-agent.socket}" "#;
+
 /// Builds the two Chronicle crontab entries: `@reboot` + the interval entry.
+///
+/// Each command is prefixed with [`SSH_AGENT_ENV`] so that `git2`'s
+/// `ssh_key_from_agent()` credential callback can reach the user's SSH agent
+/// even in the minimal cron environment.
 pub fn build_entries(binary_path: &str, cron_expr: &str) -> [String; 2] {
     [
-        format!("@reboot {binary_path} sync --quiet  {MARKER}"),
-        format!("{cron_expr} {binary_path} sync --quiet  {MARKER}"),
+        format!("@reboot {SSH_AGENT_ENV}{binary_path} sync --quiet  {MARKER}"),
+        format!("{cron_expr} {SSH_AGENT_ENV}{binary_path} sync --quiet  {MARKER}"),
     ]
 }
 
@@ -147,18 +166,30 @@ pub fn apply_uninstall(existing: &[String]) -> Vec<String> {
 
 /// Extracts the chronicle binary path from installed crontab lines.
 ///
+/// The binary path is the token immediately before `"sync"` in the command.
+/// This is position-independent, so it works regardless of whether an
+/// `SSH_AUTH_SOCK=…` prefix is present.
+///
 /// Prefers the `@reboot` line; falls back to the interval line.
 pub fn parse_installed_binary(lines: &[String]) -> Option<String> {
-    // "@reboot /path/to/chronicle sync --quiet  # chronicle-sync"
+    // Helper: find the token before "sync" in a marker line.
+    let extract = |line: &str| -> Option<String> {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        parts
+            .iter()
+            .position(|&t| t == "sync")
+            .and_then(|i| i.checked_sub(1))
+            .map(|i| parts[i].to_owned())
+    };
+
     for line in lines {
         if line.contains(MARKER) && line.starts_with("@reboot ") {
-            return line.split_whitespace().nth(1).map(str::to_owned);
+            return extract(line);
         }
     }
-    // "*/5 * * * * /path/to/chronicle sync --quiet  # chronicle-sync"
     for line in lines {
         if line.contains(MARKER) && !line.starts_with("@reboot") {
-            return line.split_whitespace().nth(5).map(str::to_owned);
+            return extract(line);
         }
     }
     None
@@ -455,13 +486,38 @@ mod tests {
     #[test]
     fn build_entries_correct_format() {
         let entries = build_entries("/usr/local/bin/chronicle", "*/5 * * * *");
-        assert_eq!(
-            entries[0],
-            "@reboot /usr/local/bin/chronicle sync --quiet  # chronicle-sync"
+        assert!(
+            entries[0].starts_with("@reboot "),
+            "reboot entry must start with @reboot"
         );
-        assert_eq!(
-            entries[1],
-            "*/5 * * * * /usr/local/bin/chronicle sync --quiet  # chronicle-sync"
+        assert!(
+            entries[0].contains("/usr/local/bin/chronicle sync --quiet"),
+            "reboot entry must contain binary and args"
+        );
+        assert!(
+            entries[0].ends_with(MARKER),
+            "reboot entry must end with marker"
+        );
+        assert!(
+            entries[1].starts_with("*/5 * * * *"),
+            "interval entry must start with cron expression"
+        );
+        assert!(
+            entries[1].contains("/usr/local/bin/chronicle sync --quiet"),
+            "interval entry must contain binary and args"
+        );
+        assert!(
+            entries[1].ends_with(MARKER),
+            "interval entry must end with marker"
+        );
+        // Both entries must include the SSH_AUTH_SOCK env snippet.
+        assert!(
+            entries[0].contains("SSH_AUTH_SOCK"),
+            "reboot entry must propagate SSH_AUTH_SOCK"
+        );
+        assert!(
+            entries[1].contains("SSH_AUTH_SOCK"),
+            "interval entry must propagate SSH_AUTH_SOCK"
         );
     }
 
