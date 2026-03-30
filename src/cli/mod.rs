@@ -11,6 +11,7 @@ use crate::canon::TokenRegistry;
 use crate::config::{self, schema::HistoryMode, CliOverrides};
 use crate::errors;
 use crate::git;
+use crate::materialize_cache::{MaterializeCache, MaterializeFileState};
 use crate::merge::set_union::{merge_jsonl, NullReporter};
 use crate::scan;
 use crate::scheduler::cron as scheduler_cron;
@@ -402,6 +403,73 @@ fn import_agent_sessions(p: &ImportParams<'_>) -> Result<(usize, usize)> {
 }
 
 // ---------------------------------------------------------------------------
+// Advisory file lock (concurrency guard — Gap 2 fix)
+// ---------------------------------------------------------------------------
+
+/// Returns the path of the advisory lock file.  Co-located with the repo
+/// directory as a sibling (one level up), matching the `StateCache` pattern:
+/// `<parent_of_repo>/chronicle.lock`.
+pub fn lock_file_path(repo_path: &Path) -> PathBuf {
+    repo_path
+        .parent()
+        .unwrap_or(repo_path)
+        .join("chronicle.lock")
+}
+
+/// Tries to open and exclusively lock `<parent_of_repo>/chronicle.lock` in
+/// a non-blocking fashion.
+///
+/// - Returns `Ok(Some(file))` — lock acquired; caller must keep `file` alive
+///   for the duration of the critical section (dropped ⇒ lock released).
+/// - Returns `Ok(None)` — another process already holds the lock.
+/// - Returns `Err(_)` — unexpected I/O error.
+fn try_acquire_sync_lock(repo_path: &Path) -> Result<Option<fs::File>> {
+    let lock_path = lock_file_path(repo_path);
+    if let Some(parent) = lock_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create lock directory {}", parent.display()))?;
+    }
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .with_context(|| format!("failed to open lock file {}", lock_path.display()))?;
+    if flock_exclusive_nb(&file)
+        .with_context(|| format!("flock failed on {}", lock_path.display()))?
+    {
+        Ok(Some(file))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Non-blocking exclusive `flock` on Unix.  Returns `true` if acquired,
+/// `false` if `EWOULDBLOCK` (another process holds the lock).  On non-Unix
+/// platforms this is a no-op that always returns `true`.
+#[cfg(unix)]
+fn flock_exclusive_nb(file: &fs::File) -> std::io::Result<bool> {
+    use std::os::unix::io::AsRawFd as _;
+    let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if ret == 0 {
+        Ok(true)
+    } else {
+        let err = std::io::Error::last_os_error();
+        if err.kind() == std::io::ErrorKind::WouldBlock {
+            Ok(false)
+        } else {
+            Err(err)
+        }
+    }
+}
+
+#[cfg(not(unix))]
+#[allow(clippy::unnecessary_wraps)]
+fn flock_exclusive_nb(_file: &fs::File) -> std::io::Result<bool> {
+    Ok(true)
+}
+
+// ---------------------------------------------------------------------------
 // chronicle sync
 // ---------------------------------------------------------------------------
 
@@ -455,6 +523,17 @@ pub fn sync_impl(dry_run: bool, quiet: bool, config_path: &Path, home: &Path) ->
         Some(cfg.storage.remote_url.as_str())
     };
     let follow_symlinks = cfg.general.follow_symlinks;
+
+    // Acquire advisory lock to prevent concurrent sync processes (Gap 2 fix).
+    // Uses non-blocking flock so a second cron invocation fails fast rather
+    // than queuing on the git index lock and causing a cascade.
+    let _sync_lock = match try_acquire_sync_lock(&repo_path)? {
+        Some(lock) => lock,
+        None => {
+            println!("[sync] Another sync is in progress — skipping this run.");
+            return Ok(());
+        }
+    };
 
     // -----------------------------------------------------------------------
     // Load state cache (missing file → empty; all files treated as New).
@@ -692,15 +771,10 @@ pub fn sync_impl(dry_run: bool, quiet: bool, config_path: &Path, home: &Path) ->
     // -----------------------------------------------------------------------
     // Phase 3: Incoming — materialize repo working tree -> local agent dirs.
     //
-    // Fast path: skip the full 1.7 GB repo scan when nothing arrived from the
-    // remote AND no outgoing files were committed this cycle.  Materialize
-    // still runs when remote_integrated > 0 (new remote content) or when
-    // outgoing_count > 0 (we just committed, so we should reflect that
-    // back to local dirs).
+    // Fast path: skip the full repo scan when nothing arrived from the remote.
+    // Outgoing files came FROM local and are already present, so an
+    // outgoing-only cycle needs no materialization pass.
     // -----------------------------------------------------------------------
-    // Only materialize when remote content actually arrived — outgoing files
-    // came FROM local and are already there, so an outgoing-only cycle needs
-    // no materialization pass.
     let materialized = if remote_integrated > 0 {
         materialize_repo_to_local(&repo_path, &cfg, home, &registry)
             .context("failed to materialize session files")?
@@ -801,6 +875,15 @@ pub fn push_impl(dry_run: bool, config_path: &Path, home: &Path) -> Result<()> {
         Some(cfg.storage.remote_url.as_str())
     };
     let follow_symlinks = cfg.general.follow_symlinks;
+
+    // Acquire advisory lock to prevent concurrent push processes (Gap 2 fix).
+    let _sync_lock = match try_acquire_sync_lock(&repo_path)? {
+        Some(lock) => lock,
+        None => {
+            println!("[push] Another sync is in progress — skipping this run.");
+            return Ok(());
+        }
+    };
 
     // Load state cache (missing file → empty cache; all files treated as New).
     // Derive the path from the repo dir so each install gets its own cache.
@@ -1241,13 +1324,24 @@ pub fn pull_impl(dry_run: bool, config_path: &Path, home: &Path) -> Result<()> {
         .context("failed to integrate remote changes")?;
 
     // Step 3: Materialize repo files to local agent session directories.
-    let materialized = materialize_repo_to_local(&repo_path, &cfg, home, &registry)
-        .context("failed to materialize session files")?;
+    //
+    // Fast path: skip the full repo scan when nothing arrived from the remote.
+    // Mirrors the same guard in sync_impl — outgoing-only or no-op pull cycles
+    // need no materialization pass.
+    let materialized = if integrated > 0 {
+        materialize_repo_to_local(&repo_path, &cfg, home, &registry)
+            .context("failed to materialize session files")?
+    } else {
+        println!("[pull] Nothing to materialize — no remote changes arrived.");
+        0
+    };
 
-    println!(
-        "Pull complete: {} remote file(s) integrated, {} file(s) materialized locally.",
-        integrated, materialized
-    );
+    if integrated > 0 {
+        println!(
+            "Pull complete: {} remote file(s) integrated, {} file(s) materialized locally.",
+            integrated, materialized
+        );
+    }
     Ok(())
 }
 
@@ -1421,6 +1515,10 @@ impl MaterializeFilter {
 /// De-canonicalize all JSONL files in the repo working tree and write them
 /// to the local agent session directories (materialization — §14 step 5).
 ///
+/// Loads and saves [`MaterializeCache`] to skip repo files whose mtime/size
+/// have not changed since the previous pass.  The cache is invalidated
+/// automatically when the canonicalization configuration changes.
+///
 /// Returns the total number of files written.
 fn materialize_repo_to_local(
     repo_path: &Path,
@@ -1428,6 +1526,21 @@ fn materialize_repo_to_local(
     home: &Path,
     registry: &TokenRegistry,
 ) -> Result<usize> {
+    // Load the materialize cache (empty if not found).
+    let cache_path = MaterializeCache::path_for_repo(repo_path);
+    let mut cache =
+        MaterializeCache::load(&cache_path).context("failed to load materialize cache")?;
+
+    // Invalidate the cache when the canonicalization config has changed.
+    let config_hash = format!(
+        "{}:{}",
+        cfg.canonicalization.level, cfg.canonicalization.home_token
+    );
+    if cache.config_hash != config_hash {
+        cache.files.clear();
+        cache.config_hash = config_hash;
+    }
+
     let filter = MaterializeFilter::from_config(cfg);
     let mut total = 0usize;
 
@@ -1435,9 +1548,16 @@ fn materialize_repo_to_local(
         let pi_sessions_repo = repo_path.join("pi").join("sessions");
         if pi_sessions_repo.exists() {
             let local_pi_dir = config::expand_path_with_home(&cfg.agents.pi.session_dir, home);
-            total +=
-                materialize_agent_dir(&pi_sessions_repo, &local_pi_dir, registry, true, &filter)
-                    .context("Pi session materialization failed")?;
+            total += materialize_agent_dir(
+                &pi_sessions_repo,
+                &local_pi_dir,
+                registry,
+                true,
+                &filter,
+                &mut cache,
+                "pi/sessions",
+            )
+            .context("Pi session materialization failed")?;
         }
     }
 
@@ -1452,10 +1572,17 @@ fn materialize_repo_to_local(
                 registry,
                 false,
                 &filter,
+                &mut cache,
+                "claude/projects",
             )
             .context("Claude project materialization failed")?;
         }
     }
+
+    // Persist the materialize cache after a successful pass.
+    cache
+        .save(&cache_path)
+        .context("failed to save materialize cache")?;
 
     Ok(total)
 }
@@ -1557,6 +1684,10 @@ fn select_partial_session_files(
 /// session files per subdirectory are written.  Existing local files outside
 /// the window are left untouched (§7.2 — no deletion propagation).
 ///
+/// `cache` is used to skip repo files whose mtime/size match the last
+/// materialization pass.  `repo_rel_base` is the repo-relative prefix for
+/// forming cache keys (e.g. `"pi/sessions"`).
+///
 /// Returns the number of files written.
 fn materialize_agent_dir(
     repo_agent_dir: &Path,
@@ -1564,6 +1695,8 @@ fn materialize_agent_dir(
     registry: &TokenRegistry,
     is_pi: bool,
     filter: &MaterializeFilter,
+    cache: &mut MaterializeCache,
+    repo_rel_base: &str,
 ) -> Result<usize> {
     let mut total = 0usize;
 
@@ -1640,6 +1773,30 @@ fn materialize_agent_dir(
 
             let local_file_path = local_session_dir.join(filename);
 
+            // Stat the repo file for the materialize cache check.
+            let meta = match fs::metadata(file_path) {
+                Ok(m) => m,
+                Err(e) => {
+                    eprintln!("  Warning: cannot stat {}: {e}", file_path.display());
+                    continue;
+                }
+            };
+            let repo_size = meta.len();
+            let repo_mtime: DateTime<Utc> = match meta.modified() {
+                Ok(st) => DateTime::<Utc>::from(st),
+                Err(_) => DateTime::<Utc>::from(std::time::SystemTime::UNIX_EPOCH),
+            };
+
+            // Cache key: "<repo_rel_base>/<canonical_dir>/<filename>"
+            let cache_key = format!("{repo_rel_base}/{canonical_dir_name}/{filename}");
+
+            // Cache hit: repo file unchanged since last materialize pass → skip entirely.
+            if let Some(cached) = cache.files.get(&cache_key) {
+                if cached.repo_mtime == repo_mtime && cached.repo_size == repo_size {
+                    continue;
+                }
+            }
+
             let raw = match fs::read_to_string(file_path) {
                 Ok(c) => c,
                 Err(e) => {
@@ -1675,6 +1832,14 @@ fn materialize_agent_dir(
             if local_file_path.exists() {
                 if let Ok(existing) = fs::read_to_string(&local_file_path) {
                     if existing == decanon_content {
+                        // Content unchanged — update cache so the next pass skips this file.
+                        cache.files.insert(
+                            cache_key,
+                            MaterializeFileState {
+                                repo_mtime,
+                                repo_size,
+                            },
+                        );
                         continue;
                     }
                 }
@@ -1682,6 +1847,15 @@ fn materialize_agent_dir(
 
             // Write file, preserving existing permissions (§11.5).
             write_preserving_permissions(&local_file_path, &decanon_content)?;
+
+            // Update cache entry after a successful write.
+            cache.files.insert(
+                cache_key,
+                MaterializeFileState {
+                    repo_mtime,
+                    repo_size,
+                },
+            );
             total += 1;
         }
     }
@@ -2150,6 +2324,7 @@ pub fn handle_schedule_status() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::materialize_cache::MaterializeCache;
     use tempfile::TempDir;
 
     /// Core init logic extracted for testability (avoids touching real home dir).
@@ -3139,6 +3314,70 @@ mod tests {
         );
     }
 
+    #[test]
+    fn pull_skips_materialize_when_no_remote_changes() {
+        let dir = TempDir::new().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+
+        let repo_path = dir.path().join("repo");
+        let remote_path = dir.path().join("remote");
+        let pi_sessions = dir.path().join("pi_sessions");
+        let claude_sessions = dir.path().join("claude_sessions");
+        let config_path = dir.path().join("config.toml");
+
+        // Create a bare empty remote.  No commits pushed yet, so
+        // integrate_remote_changes will return 0 (no tracking ref found).
+        {
+            let mut opts = git2::RepositoryInitOptions::new();
+            opts.bare(true);
+            opts.initial_head("main");
+            git2::Repository::init_opts(&remote_path, &opts).unwrap();
+        }
+
+        write_push_config(
+            &config_path,
+            &repo_path,
+            &remote_path,
+            &pi_sessions,
+            &claude_sessions,
+            "test-machine",
+        );
+
+        // Initialise the local working repo and plant a canonical session file
+        // in its working tree.  pull_impl will re-open this repo and find it
+        // has content that *could* be materialized — but must not be, because
+        // the remote has no new commits.
+        {
+            let remote_url = remote_path.to_str().unwrap();
+            git::RepoManager::init_or_open(&repo_path, Some(remote_url), "main").unwrap();
+
+            let canonical_dir = repo_path
+                .join("pi")
+                .join("sessions")
+                .join("--{{SYNC_HOME}}-Dev-foo--");
+            std::fs::create_dir_all(&canonical_dir).unwrap();
+            std::fs::write(
+                canonical_dir.join("session.jsonl"),
+                b"{\"type\":\"session\",\"id\":\"1\",\"cwd\":\"{{SYNC_HOME}}/Dev\"}\n",
+            )
+            .unwrap();
+        }
+
+        // pull_impl must succeed and skip materialization (integrated == 0).
+        pull_impl(false, &config_path, &home).unwrap();
+
+        // The local pi_sessions directory must NOT have been populated.
+        let local_dir = pi_sessions.join(pi_session_dir_name(&home));
+        let dir_is_empty =
+            !local_dir.exists() || std::fs::read_dir(&local_dir).unwrap().next().is_none();
+        assert!(
+            dir_is_empty,
+            "materialize must be skipped when integrated == 0; \
+             found files in {local_dir:?}"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn write_preserving_permissions_uses_0644_for_new_file() {
@@ -3311,12 +3550,15 @@ mod tests {
         let home = dir.path().to_path_buf();
         let registry = TokenRegistry::from_config(&CanonicalizationConfig::default(), &home);
 
+        let mut cache = MaterializeCache::default();
         let count = materialize_agent_dir(
             &repo_agent_dir,
             &local_base,
             &registry,
             true,
             &MaterializeFilter::Full,
+            &mut cache,
+            "pi/sessions",
         )
         .unwrap();
 
@@ -3351,12 +3593,15 @@ mod tests {
         let home = dir.path().to_path_buf();
         let registry = TokenRegistry::from_config(&CanonicalizationConfig::default(), &home);
 
+        let mut cache = MaterializeCache::default();
         let count = materialize_agent_dir(
             &repo_agent_dir,
             &local_base,
             &registry,
             true,
             &MaterializeFilter::Partial(2),
+            &mut cache,
+            "pi/sessions",
         )
         .unwrap();
 
@@ -3697,12 +3942,15 @@ mod tests {
         let registry = TokenRegistry::from_config(&CanonicalizationConfig::default(), &home);
 
         // Partial window = 1 (only the new file should be written).
+        let mut cache = MaterializeCache::default();
         materialize_agent_dir(
             &repo_agent_dir,
             &local_base,
             &registry,
             true,
             &MaterializeFilter::Partial(1),
+            &mut cache,
+            "pi/sessions",
         )
         .unwrap();
 
@@ -4104,5 +4352,134 @@ mod tests {
             set_canon_level(&config_path, "4").is_err(),
             "level 4 should be rejected"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // US-003: MaterializeCache skips unchanged repo files
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn materialize_cache_skips_unchanged_files_on_second_call() {
+        let dir = TempDir::new().unwrap();
+        let home = dir.path().to_path_buf();
+
+        let repo_path = dir.path().join("repo");
+        let pi_sessions = dir.path().join("pi_sessions");
+        let config_path = dir.path().join("config.toml");
+
+        // Plant a canonical session file in the repo working tree.
+        // Using a dir name with no {{SYNC_HOME}} token so decanonicalization
+        // is a no-op and the local path is predictable.
+        let canonical_dir = repo_path
+            .join("pi")
+            .join("sessions")
+            .join("--Users-testuser-Dev-proj--");
+        std::fs::create_dir_all(&canonical_dir).unwrap();
+        std::fs::write(
+            canonical_dir.join("session.jsonl"),
+            b"{\"type\":\"session\",\"id\":\"1\"}\n",
+        )
+        .unwrap();
+
+        let toml = format!(
+            "[general]\nmachine_name = \"cache-test\"\n\n\
+             [storage]\nrepo_path = \"{}\"\n\n\
+             [agents.pi]\nenabled = true\nsession_dir = \"{}\"\n\n\
+             [agents.claude]\nenabled = false\n",
+            repo_path.display(),
+            pi_sessions.display(),
+        );
+        std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        std::fs::write(&config_path, toml.as_bytes()).unwrap();
+
+        let cfg = config::load(Some(&config_path), &CliOverrides::default()).unwrap();
+        let registry = TokenRegistry::from_config(&cfg.canonicalization, &home);
+
+        // First call: file is new → must be written → count = 1.
+        let count1 = materialize_repo_to_local(&repo_path, &cfg, &home, &registry).unwrap();
+        assert_eq!(count1, 1, "first materialize call should write 1 file");
+
+        // Second call: repo file mtime/size unchanged → cache hit → count = 0.
+        let count2 = materialize_repo_to_local(&repo_path, &cfg, &home, &registry).unwrap();
+        assert_eq!(
+            count2, 0,
+            "second materialize call with unchanged repo file should produce 0 (cache hit)"
+        );
+
+        // Verify the cache file was persisted.
+        let cache_path = MaterializeCache::path_for_repo(&repo_path);
+        assert!(
+            cache_path.exists(),
+            "materialize-state.json must be persisted after first call"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // US-004: Advisory file lock
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn lock_file_path_is_sibling_of_repo_dir() {
+        // Standard case: repo lives inside a parent directory.
+        let lock = lock_file_path(std::path::Path::new(
+            "/home/user/.local/share/chronicle/repo",
+        ));
+        assert!(
+            lock.to_string_lossy().ends_with("chronicle.lock"),
+            "lock file name must be chronicle.lock"
+        );
+        assert_eq!(
+            lock.parent().unwrap(),
+            std::path::Path::new("/home/user/.local/share/chronicle"),
+            "lock file must be a sibling of the repo dir"
+        );
+    }
+
+    #[test]
+    fn lock_file_path_falls_back_to_repo_path_when_no_parent() {
+        // Edge case: repo_path has no parent (e.g., just "repo" or "/").
+        let lock = lock_file_path(std::path::Path::new("repo"));
+        // unwrap_or(repo_path) kicks in; result still ends with chronicle.lock
+        assert!(lock.to_string_lossy().ends_with("chronicle.lock"));
+    }
+
+    #[test]
+    fn try_acquire_sync_lock_creates_and_releases_lock_file() {
+        let dir = TempDir::new().unwrap();
+        let repo_path = dir.path().join("repo");
+        // repo dir itself does not need to exist; only its parent does.
+
+        // Acquiring the lock should succeed and create chronicle.lock.
+        let lock = try_acquire_sync_lock(&repo_path)
+            .expect("try_acquire_sync_lock should not error")
+            .expect("lock should be acquired when no other holder exists");
+
+        let lock_path = lock_file_path(&repo_path);
+        assert!(lock_path.exists(), "chronicle.lock must be created");
+
+        // Drop the lock; on Unix this releases the flock.
+        drop(lock);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn second_lock_attempt_returns_none_while_first_held() {
+        let dir = TempDir::new().unwrap();
+        let repo_path = dir.path().join("repo");
+
+        // First acquisition — must succeed.
+        let lock1 = try_acquire_sync_lock(&repo_path)
+            .expect("first acquisition should not error")
+            .expect("first acquisition should succeed");
+
+        // Second attempt while first is held — must return None (EWOULDBLOCK).
+        let lock2 = try_acquire_sync_lock(&repo_path)
+            .expect("second acquisition should not error (no unexpected I/O)");
+        assert!(
+            lock2.is_none(),
+            "second acquisition must return None while first lock is held"
+        );
+
+        drop(lock1);
     }
 }
