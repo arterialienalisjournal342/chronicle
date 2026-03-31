@@ -5,7 +5,7 @@ Thank you for your interest in contributing! This document explains how to get s
 ## Quick Start
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/chronicle.git
+git clone https://github.com/geekmuse/chronicle.git
 cd chronicle
 cargo build
 cargo test
@@ -17,7 +17,7 @@ See the [Development Guide](docs/002-development-guide.md) for the full workflow
 
 ### Reporting Bugs
 
-Open a [GitHub issue](https://github.com/YOUR_USERNAME/chronicle/issues/new?template=bug_report.md) with:
+Open a [GitHub issue](https://github.com/geekmuse/chronicle/issues/new?template=bug_report.md) with:
 - What you did
 - What you expected
 - What actually happened
@@ -25,7 +25,7 @@ Open a [GitHub issue](https://github.com/YOUR_USERNAME/chronicle/issues/new?temp
 
 ### Suggesting Features
 
-Open a [GitHub issue](https://github.com/YOUR_USERNAME/chronicle/issues/new?template=feature_request.md) describing the use case. Features that fit the [project scope](docs/specs/001-initial-delivery.md) and come with a clear motivating scenario are most likely to be accepted.
+Open a [GitHub issue](https://github.com/geekmuse/chronicle/issues/new?template=feature_request.md) describing the use case. Features that fit the [project scope](docs/specs/001-initial-delivery.md) and come with a clear motivating scenario are most likely to be accepted.
 
 ### Submitting a Pull Request
 
