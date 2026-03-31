@@ -61,6 +61,18 @@ pub struct GeneralConfig {
     /// cap the jitter window, or `-1` to disable jitter entirely.
     #[serde(default)]
     pub sync_jitter_secs: i32,
+
+    /// Maximum age (in seconds) of the advisory lock file before it is
+    /// considered stale and eligible for automatic recovery.  Default is
+    /// `300` (5 minutes).  Set to `0` to disable age-based recovery (PID-
+    /// based recovery still applies).  Set to `-1` to disable all stale-
+    /// lock recovery (original v0.4.2 behaviour).
+    #[serde(default = "general_default_lock_timeout_secs")]
+    pub lock_timeout_secs: i64,
+}
+
+fn general_default_lock_timeout_secs() -> i64 {
+    300
 }
 
 impl Default for GeneralConfig {
@@ -71,6 +83,7 @@ impl Default for GeneralConfig {
             log_level: general_default_log_level(),
             follow_symlinks: false,
             sync_jitter_secs: 0,
+            lock_timeout_secs: general_default_lock_timeout_secs(),
         }
     }
 }

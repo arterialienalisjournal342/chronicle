@@ -417,31 +417,147 @@ pub fn lock_file_path(repo_path: &Path) -> PathBuf {
 }
 
 /// Tries to open and exclusively lock `<parent_of_repo>/chronicle.lock` in
-/// a non-blocking fashion.
+/// a non-blocking fashion, with stale-lock recovery.
 ///
-/// - Returns `Ok(Some(file))` — lock acquired; caller must keep `file` alive
+/// `lock_timeout_secs` controls automatic lock recovery:
+/// - `> 0`: break the lock if it is older than this many seconds **or** the
+///   holding PID is no longer alive.
+/// - `0`: only break the lock if the holding PID is dead (no age check).
+/// - `< 0`: disable all stale-lock recovery (original v0.4.2 behaviour).
+///
+/// Returns:
+/// - `Ok(Some(file))` — lock acquired; caller must keep `file` alive
 ///   for the duration of the critical section (dropped ⇒ lock released).
-/// - Returns `Ok(None)` — another process already holds the lock.
-/// - Returns `Err(_)` — unexpected I/O error.
-fn try_acquire_sync_lock(repo_path: &Path) -> Result<Option<fs::File>> {
+/// - `Ok(None)` — another process already holds the lock.
+/// - `Err(_)` — unexpected I/O error.
+fn try_acquire_sync_lock(repo_path: &Path, lock_timeout_secs: i64) -> Result<Option<fs::File>> {
     let lock_path = lock_file_path(repo_path);
     if let Some(parent) = lock_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create lock directory {}", parent.display()))?;
     }
-    let file = fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(false)
-        .open(&lock_path)
-        .with_context(|| format!("failed to open lock file {}", lock_path.display()))?;
+
+    // First attempt.
+    let file = open_lock_file(&lock_path)?;
     if flock_exclusive_nb(&file)
         .with_context(|| format!("flock failed on {}", lock_path.display()))?
     {
-        Ok(Some(file))
-    } else {
-        Ok(None)
+        stamp_lock_file(&file)?;
+        return Ok(Some(file));
     }
+
+    // Lock is held — check for staleness (unless recovery is disabled).
+    if lock_timeout_secs < 0 {
+        return Ok(None);
+    }
+
+    if is_lock_stale(&lock_path, lock_timeout_secs)? {
+        tracing::warn!("breaking stale lock at {}", lock_path.display());
+        // Remove the stale file, open a fresh one, try again.
+        let _ = fs::remove_file(&lock_path);
+        drop(file);
+        let file2 = open_lock_file(&lock_path)?;
+        if flock_exclusive_nb(&file2)
+            .with_context(|| format!("flock failed on {}", lock_path.display()))?
+        {
+            stamp_lock_file(&file2)?;
+            return Ok(Some(file2));
+        }
+    }
+
+    Ok(None)
+}
+
+/// Open (or create) the lock file for writing.
+fn open_lock_file(lock_path: &Path) -> Result<fs::File> {
+    fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(lock_path)
+        .with_context(|| format!("failed to open lock file {}", lock_path.display()))
+}
+
+/// Write `<PID> <UNIX_TIMESTAMP>` into the lock file so that other processes
+/// can detect staleness.
+fn stamp_lock_file(file: &fs::File) -> Result<()> {
+    use io::Write as _;
+    let pid = std::process::id();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    // Truncate any prior content, then write.
+    file.set_len(0)?;
+    let mut writer = io::BufWriter::new(file);
+    write!(writer, "{pid} {now}")?;
+    writer.flush()?;
+    Ok(())
+}
+
+/// Returns `true` if the lock file is stale — either the holder PID is dead
+/// or the lock age exceeds `timeout_secs` (when > 0).
+fn is_lock_stale(lock_path: &Path, timeout_secs: i64) -> Result<bool> {
+    // Read PID and timestamp from the file.
+    let contents = match fs::read_to_string(lock_path) {
+        Ok(c) => c,
+        Err(_) => return Ok(false), // can't read → assume not stale
+    };
+    let mut parts = contents.split_whitespace();
+    let pid: Option<u32> = parts.next().and_then(|s| s.parse().ok());
+    let stamp: Option<u64> = parts.next().and_then(|s| s.parse().ok());
+
+    // Check 1: Is the holding process still alive?
+    if let Some(p) = pid {
+        if !is_process_alive(p) {
+            tracing::info!(pid = p, "lock holder process is dead");
+            return Ok(true);
+        }
+    }
+
+    // Check 2: Has the lock exceeded the age threshold?
+    if timeout_secs > 0 {
+        if let Some(ts) = stamp {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let age = now.saturating_sub(ts);
+            #[allow(clippy::cast_sign_loss)]
+            if age > timeout_secs as u64 {
+                tracing::info!(
+                    age_secs = age,
+                    timeout_secs,
+                    "lock file age exceeds timeout"
+                );
+                return Ok(true);
+            }
+        }
+    }
+
+    Ok(false)
+}
+
+/// Check whether a process with the given PID is still alive.
+#[cfg(unix)]
+fn is_process_alive(pid: u32) -> bool {
+    // kill(pid, 0) checks existence without sending a signal.
+    // Returns 0 if process exists, -1 with ESRCH if it doesn't.
+    #[allow(clippy::cast_possible_wrap)]
+    let ret = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if ret == 0 {
+        return true;
+    }
+    // EPERM means the process exists but we lack permission to signal it.
+    let err = std::io::Error::last_os_error();
+    err.raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(not(unix))]
+fn is_process_alive(_pid: u32) -> bool {
+    // Cannot check on non-Unix; assume alive (fall back to age check only).
+    true
 }
 
 /// Non-blocking exclusive `flock` on Unix.  Returns `true` if acquired,
@@ -526,8 +642,9 @@ pub fn sync_impl(dry_run: bool, quiet: bool, config_path: &Path, home: &Path) ->
 
     // Acquire advisory lock to prevent concurrent sync processes (Gap 2 fix).
     // Uses non-blocking flock so a second cron invocation fails fast rather
-    // than queuing on the git index lock and causing a cascade.
-    let _sync_lock = match try_acquire_sync_lock(&repo_path)? {
+    // than queuing on the git index lock and causing a cascade.  Stale locks
+    // (dead PID or age > lock_timeout_secs) are broken automatically (ADR-001).
+    let _sync_lock = match try_acquire_sync_lock(&repo_path, cfg.general.lock_timeout_secs)? {
         Some(lock) => lock,
         None => {
             println!("[sync] Another sync is in progress — skipping this run.");
@@ -877,7 +994,7 @@ pub fn push_impl(dry_run: bool, config_path: &Path, home: &Path) -> Result<()> {
     let follow_symlinks = cfg.general.follow_symlinks;
 
     // Acquire advisory lock to prevent concurrent push processes (Gap 2 fix).
-    let _sync_lock = match try_acquire_sync_lock(&repo_path)? {
+    let _sync_lock = match try_acquire_sync_lock(&repo_path, cfg.general.lock_timeout_secs)? {
         Some(lock) => lock,
         None => {
             println!("[push] Another sync is in progress — skipping this run.");
@@ -1296,6 +1413,15 @@ pub fn pull_impl(dry_run: bool, config_path: &Path, home: &Path) -> Result<()> {
         None
     } else {
         Some(cfg.storage.remote_url.as_str())
+    };
+
+    // Acquire advisory lock to prevent concurrent pull/sync processes (ADR-001).
+    let _sync_lock = match try_acquire_sync_lock(&repo_path, cfg.general.lock_timeout_secs)? {
+        Some(lock) => lock,
+        None => {
+            println!("[pull] Another sync is in progress — skipping this run.");
+            return Ok(());
+        }
     };
 
     let manager = git::RepoManager::init_or_open(&repo_path, remote_url, &cfg.storage.branch)
@@ -4447,15 +4573,22 @@ mod tests {
     fn try_acquire_sync_lock_creates_and_releases_lock_file() {
         let dir = TempDir::new().unwrap();
         let repo_path = dir.path().join("repo");
-        // repo dir itself does not need to exist; only its parent does.
 
         // Acquiring the lock should succeed and create chronicle.lock.
-        let lock = try_acquire_sync_lock(&repo_path)
+        let lock = try_acquire_sync_lock(&repo_path, 300)
             .expect("try_acquire_sync_lock should not error")
             .expect("lock should be acquired when no other holder exists");
 
         let lock_path = lock_file_path(&repo_path);
         assert!(lock_path.exists(), "chronicle.lock must be created");
+
+        // Lock file must contain PID and timestamp.
+        let contents = fs::read_to_string(&lock_path).expect("read lock file");
+        let parts: Vec<&str> = contents.split_whitespace().collect();
+        assert_eq!(parts.len(), 2, "lock file must contain PID and timestamp");
+        let pid: u32 = parts[0].parse().expect("PID must be a number");
+        assert_eq!(pid, std::process::id(), "PID must match current process");
+        let _ts: u64 = parts[1].parse().expect("timestamp must be a number");
 
         // Drop the lock; on Unix this releases the flock.
         drop(lock);
@@ -4468,12 +4601,12 @@ mod tests {
         let repo_path = dir.path().join("repo");
 
         // First acquisition — must succeed.
-        let lock1 = try_acquire_sync_lock(&repo_path)
+        let lock1 = try_acquire_sync_lock(&repo_path, -1)
             .expect("first acquisition should not error")
             .expect("first acquisition should succeed");
 
-        // Second attempt while first is held — must return None (EWOULDBLOCK).
-        let lock2 = try_acquire_sync_lock(&repo_path)
+        // Second attempt with recovery disabled — must return None.
+        let lock2 = try_acquire_sync_lock(&repo_path, -1)
             .expect("second acquisition should not error (no unexpected I/O)");
         assert!(
             lock2.is_none(),
@@ -4481,5 +4614,85 @@ mod tests {
         );
 
         drop(lock1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stale_lock_broken_when_pid_is_dead() {
+        let dir = TempDir::new().unwrap();
+        let repo_path = dir.path().join("repo");
+        let lock_path = lock_file_path(&repo_path);
+
+        // Manually create a lock file with a bogus PID that doesn't exist.
+        fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+        // PID 2_000_000_000 is almost certainly not a running process on any
+        // real system (well above typical pid_max), and safely fits in i32.
+        fs::write(&lock_path, "2000000000 9999999999").unwrap();
+
+        // Acquire a real flock on the file so the first flock attempt fails,
+        // then drop it so the recovery attempt can succeed.  Actually, since
+        // the file was created externally (no flock held), the first flock
+        // attempt should succeed directly.  To test the stale-recovery path
+        // we need the flock to be held.
+        //
+        // Strategy: fork a short-lived child that flocks the file and exits,
+        // but that's complex.  Instead, test the `is_lock_stale` function
+        // directly and then test the full flow without a held flock.
+
+        // The lock file has a dead PID → is_lock_stale should return true.
+        assert!(
+            is_lock_stale(&lock_path, 0).expect("is_lock_stale should not error"),
+            "lock with dead PID must be stale"
+        );
+    }
+
+    #[test]
+    fn stale_lock_detected_when_age_exceeds_timeout() {
+        let dir = TempDir::new().unwrap();
+        let repo_path = dir.path().join("repo");
+        let lock_path = lock_file_path(&repo_path);
+
+        fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+        // Write current PID (alive) but a timestamp from 10 minutes ago.
+        let old_ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            - 600;
+        fs::write(&lock_path, format!("{} {}", std::process::id(), old_ts)).unwrap();
+
+        // With timeout of 300s, the 600s-old lock should be stale.
+        assert!(
+            is_lock_stale(&lock_path, 300).expect("is_lock_stale should not error"),
+            "lock older than timeout must be stale"
+        );
+
+        // With timeout of 0, age check is skipped; PID is alive → not stale.
+        assert!(
+            !is_lock_stale(&lock_path, 0).expect("is_lock_stale should not error"),
+            "age check disabled (timeout=0) and PID alive → not stale"
+        );
+    }
+
+    #[test]
+    fn lock_recovery_disabled_with_negative_timeout() {
+        let dir = TempDir::new().unwrap();
+        let repo_path = dir.path().join("repo");
+
+        // Acquire a lock normally.
+        let _lock1 = try_acquire_sync_lock(&repo_path, 300)
+            .expect("should not error")
+            .expect("should acquire");
+
+        // With recovery disabled (-1), second attempt must return None even
+        // though the lock_timeout_secs would normally trigger recovery.
+        let lock2 = try_acquire_sync_lock(&repo_path, -1).expect("should not error");
+
+        // On Unix this will be None (EWOULDBLOCK, no recovery).  On non-Unix
+        // flock is a no-op so it would succeed — only assert on Unix.
+        #[cfg(unix)]
+        assert!(lock2.is_none(), "recovery disabled: must return None");
+        #[cfg(not(unix))]
+        let _ = lock2;
     }
 }

@@ -68,6 +68,7 @@ chronicle/
 │   ├── specs/                       # Feature specifications and design docs
 │   │   └── 001-initial-delivery.md  # Full project specification (v1.0)
 │   ├── adrs/                        # Architecture Decision Records
+│   │   └── 001-stale-lock-recovery.md # Stale lock recovery after sleep/suspend
 │   ├── references/                  # CLI reference, config reference
 │   ├── tasks/                       # Work items, backlogs
 │   └── research/                    # Spikes, investigations

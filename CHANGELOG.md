@@ -8,8 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Stale lock recovery (ADR-001)** — `try_acquire_sync_lock` now writes the
+  holder's PID and a UTC timestamp into `chronicle.lock`.  When a new process
+  finds the lock held, it checks whether the holder is still alive (`kill(pid, 0)`)
+  and whether the lock age exceeds a configurable timeout.  If either check
+  indicates staleness the lock is broken automatically, allowing the next cron
+  invocation to proceed without manual intervention.  This fixes the scenario
+  where a machine sleeps mid-sync and the hung process keeps the lock for hours.
+- **`general.lock_timeout_secs` config option** — controls the maximum lock age
+  before automatic recovery (default: 300 seconds / 5 minutes).  Set to `0` for
+  PID-only recovery, or `-1` to disable recovery entirely.
+- **Advisory lock on `chronicle pull`** — `pull_impl` now acquires the same
+  advisory flock as `sync` and `push`, preventing concurrent pull/sync races.
 
 ### Fixed
+- **Stale lock after sleep/suspend** — machines that entered a low-power state
+  during a cron-scheduled sync would hold the lock indefinitely after waking,
+  silently skipping all subsequent syncs.  The new staleness detection
+  (PID liveness + age timeout) resolves this automatically.
 
 ### Changed
 
