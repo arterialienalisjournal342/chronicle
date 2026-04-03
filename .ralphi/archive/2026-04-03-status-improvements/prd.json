@@ -1,0 +1,104 @@
+{
+  "project": "chronicle",
+  "branchName": "ralph/status-improvements",
+  "description": "Replace the terse `chronicle status` output with a structured, human-friendly display covering five sections (Config/Machine, Last Sync, Pending Files, Lock State, Scheduler). Adds --verbose, --porcelain, and --no-color flags. Introduces sync_state.json to track last-sync timestamp and duration. Spec: docs/specs/002-status-improvements.md.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add sync_state.json — schema, atomic write, and wire into sync/push/pull",
+      "description": "Introduce a new sync_state.json file that records the timestamp, duration, and operation type of the last successful sync, push, or pull. This is the data source for the 'Last Sync' section of chronicle status. The file must be written atomically (write to .tmp then rename) co-located with chronicle.lock in the repo work directory. Wire the write into sync_impl, push_impl, and pull_impl at the end of each successful operation.",
+      "acceptanceCriteria": [
+        "New SyncState struct (serde Serialize/Deserialize) with fields: last_sync_time (DateTime<Utc>), last_sync_duration_ms (u64), last_sync_op (enum or String: 'sync' | 'push' | 'pull')",
+        "write_sync_state(repo_path, op, duration) helper writes JSON atomically: serialize to temp file then fs::rename",
+        "sync_state_path(repo_path) returns <repo_work_dir>/sync_state.json (same directory as chronicle.lock)",
+        "sync_impl calls write_sync_state on successful completion, recording elapsed wall-clock duration",
+        "push_impl calls write_sync_state on successful completion",
+        "pull_impl calls write_sync_state on successful completion",
+        "Unit tests: write_sync_state round-trips correctly (write then read back), missing file returns None/default gracefully, path helper returns expected path",
+        "cargo test && cargo clippy -- -D warnings && cargo fmt --check pass"
+      ],
+      "priority": 1,
+      "status": "done",
+      "dependsOn": [],
+      "notes": "Keep SyncState minimal — only the three fields needed by the status display. Atomic write pattern mirrors the existing StateCache pattern in src/scan/mod.rs.",
+      "startedAt": "2026-04-03T02:55:50.430Z",
+      "updatedAt": "2026-04-03T03:00:44.892Z",
+      "completedAt": "2026-04-03T03:00:44.892Z"
+    },
+    {
+      "id": "US-002",
+      "title": "StatusArgs CLI flags, output formatter, and Config/Machine section",
+      "description": "Add --verbose (-v), --porcelain, and --no-color flags to StatusArgs in src/cli/mod.rs. Extract status_impl as a standalone testable function. Implement the output formatting layer (✓/⚠/✗ symbols, ANSI color, TTY detection, NO_COLOR env var, porcelain key=value mode). Implement the Config/Machine section: load config, validate git.remote is set, check each enabled agent's sessions directory exists.",
+      "acceptanceCriteria": [
+        "StatusArgs gains fields: verbose: bool, porcelain: bool, no_color: bool (all default false)",
+        "status_impl(args: &StatusArgs, config: &Config) is extracted and callable from tests without spawning a process",
+        "StatusFormatter (or equivalent) renders a line as '✓  Label: detail' (green), '⚠  Label: detail' (yellow), or '✗  Label: detail' (red) when color is enabled",
+        "Color is suppressed when: stdout is not a TTY, NO_COLOR env var is set, or --no-color is passed",
+        "--porcelain mode emits 'key=value' lines with no symbols or color",
+        "Config/Machine section emits: machine name, remote URL; ✗ if config file missing or unparseable, ✗ if git.remote is empty, ✗ if an enabled agent's sessions_dir does not exist",
+        "Unit tests cover: color suppression (no-color flag, NO_COLOR env), porcelain format, config-ok path, config-missing path, missing sessions_dir path",
+        "cargo test && cargo clippy -- -D warnings && cargo fmt --check pass"
+      ],
+      "priority": 2,
+      "status": "done",
+      "dependsOn": [],
+      "notes": "Used manual ANSI codes (no new dependency). TTY detection via std::io::IsTerminal. StatusFormatter<W: io::Write> for testable output. status_write() inner fn captures output in tests.",
+      "startedAt": "2026-04-03T03:00:44.894Z",
+      "updatedAt": "2026-04-03T03:15:48.646Z",
+      "completedAt": "2026-04-03T03:15:48.646Z"
+    },
+    {
+      "id": "US-003",
+      "title": "Last Sync, Pending Files, and Lock State sections",
+      "description": "Implement the three data-driven sections of chronicle status. Last Sync: read sync_state.json (from US-001), display timestamp and duration, or '⚠ never' if file absent. Pending Files: use the existing scan module (src/scan/mod.rs) to count files whose mtime/size differs from the last scan state; terse shows count only. Lock State: read chronicle.lock, determine whether it is free, held by a live PID, or stale.",
+      "acceptanceCriteria": [
+        "Last Sync section: ✓ with timestamp + duration when sync_state.json exists; ⚠ 'never' when absent",
+        "Last Sync porcelain keys: last_sync_time=<ISO8601 or empty>, last_sync_duration_ms=<n or empty>",
+        "Pending Files section: ✓ 'none' when 0 changed; ⚠ 'N files changed since last sync' when N > 0",
+        "Pending Files uses src/scan/mod.rs change detection against the persisted scan state (does not force a new scan write)",
+        "Pending Files porcelain key: pending_files=<n>",
+        "Lock State section: ✓ 'free' when no lock file; ⚠ 'held by PID <n> since <ts>' when PID is alive; ✗ 'stale lock (PID <n> dead)' when PID is dead or age exceeds lock_timeout_secs",
+        "Lock State porcelain key: lock_state=free|held|stale",
+        "Unit tests: last-sync-present, last-sync-absent, pending-files-zero, pending-files-nonzero, lock-free, lock-held-live, lock-stale",
+        "cargo test && cargo clippy -- -D warnings && cargo fmt --check pass"
+      ],
+      "priority": 3,
+      "status": "done",
+      "dependsOn": [
+        "US-001",
+        "US-002"
+      ],
+      "notes": "Re-use the PID liveness check already implemented for stale lock recovery (src/git/mod.rs). Do not trigger a new scan write — status must be read-only with respect to state files.",
+      "startedAt": "2026-04-03T03:15:48.648Z",
+      "updatedAt": "2026-04-03T03:23:02.315Z",
+      "completedAt": "2026-04-03T03:23:02.315Z"
+    },
+    {
+      "id": "US-004",
+      "title": "Scheduler section, --verbose expansion, porcelain completion, and integration test",
+      "description": "Add the final Scheduler section (crontab installed / not installed / malformed, next-run time estimate). Expand --verbose mode: Pending Files shows full file list instead of count, Config section shows effective config values. Finalize porcelain output with all remaining keys. Add an integration test covering the full happy path (all five sections, all ✓) and at least one error path (missing agent sessions dir).",
+      "acceptanceCriteria": [
+        "Scheduler section: ✓ 'installed — next run in N min' when cron entry found and parseable; ⚠ 'not installed — run chronicle schedule install' when absent; ✗ 'cron entry present but unrecognised format' when entry is malformed",
+        "Next-run time is computed from the cron expression relative to now; if unparseable, omit 'next run in' clause rather than erroring",
+        "Scheduler porcelain keys: scheduler_state=installed|not_installed|malformed, scheduler_next_run_secs=<n or empty>",
+        "--verbose Pending Files: prints each changed file path indented under the section header instead of just the count",
+        "--verbose Config: prints effective config values (remote URL, agents enabled, canonicalization level, lock_timeout_secs)",
+        "All porcelain keys from spec §3.3 are emitted: machine, remote, last_sync_time, last_sync_duration_ms, pending_files, lock_state, scheduler_state, scheduler_next_run_secs, config_ok, config_error",
+        "chronicle status always exits 0 regardless of section results",
+        "Integration test: happy-path run with valid config, existing sync_state.json, 0 pending files, free lock, installed cron — all five sections emit ✓",
+        "Integration test: error-path run with a missing agent sessions_dir — Config section emits ✗ and config_ok=false in porcelain",
+        "cargo test && cargo clippy -- -D warnings && cargo fmt --check pass"
+      ],
+      "priority": 4,
+      "status": "done",
+      "dependsOn": [
+        "US-002",
+        "US-003"
+      ],
+      "notes": "For next-run time computation, inspect the existing scheduler/cron.rs for any cron-expression parsing already present before reaching for an external crate. If none exists, a simple 'minutes since last run mod interval' estimate is acceptable.",
+      "startedAt": "2026-04-03T03:23:02.318Z",
+      "updatedAt": "2026-04-03T03:35:00.000Z",
+      "completedAt": "2026-04-03T03:35:00.000Z"
+    }
+  ]
+}
