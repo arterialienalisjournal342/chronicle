@@ -90,15 +90,15 @@
         "cargo test && cargo clippy -- -D warnings && cargo fmt --check pass"
       ],
       "priority": 4,
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "US-002",
         "US-003"
       ],
       "notes": "For next-run time computation, inspect the existing scheduler/cron.rs for any cron-expression parsing already present before reaching for an external crate. If none exists, a simple 'minutes since last run mod interval' estimate is acceptable.",
       "startedAt": "2026-04-03T03:23:02.318Z",
-      "updatedAt": "2026-04-03T03:23:02.318Z",
-      "completedAt": null
+      "updatedAt": "2026-04-03T03:35:00.000Z",
+      "completedAt": "2026-04-03T03:35:00.000Z"
     }
   ]
 }
