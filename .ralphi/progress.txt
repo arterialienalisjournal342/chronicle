@@ -43,3 +43,32 @@ Corrective Plan: N/A
     to a shared internal module (e.g. `src/util.rs`).
   - Parallel test execution causes flaky lock-contention failures in push tests — known issue.
 ---
+
+## 2026-04-03 — US-002
+Session: iter-230fbbcf
+Review Outcome: PASS
+Trajectory: ON_TRACK
+Trajectory Notes: N/A
+Corrective Plan: N/A
+- Wired `chronicle doctor` into the CLI (src/main.rs + src/cli/mod.rs)
+- Added `DoctorArgs { porcelain: bool, no_color: bool }` struct
+- Added `handle_doctor`, `doctor_impl`, `doctor_write` as layered entry points
+- Added `run_doctor_checks` — collects live check results (FS, network, crontab)
+- Added `format_doctor_results` — pure formatter accepting `DoctorCheckResults`
+  and any `io::Write` writer; tested directly from unit tests
+- Added `emit_doctor_section` — section header + per-check lines + blank line
+- Extended `StatusFormatter<W>` with `section_header`, `hint_line`,
+  `skipped_check`, `blank_line`, `raw_line` methods
+- Exit codes: 0 all-pass, 1 warnings-only, 2 any-error (via std::process::exit)
+- Color logic: NO_COLOR env / --no-color flag / --porcelain all suppress ANSI
+- Files changed: src/main.rs, src/cli/mod.rs, .ralphi/prd.json, .ralphi/progress.txt
+- **Learnings for future iterations:**
+  - `format_doctor_results` takes `DoctorCheckResults` by value (all Vecs);
+    tests inject fake `DoctorCheckResults` directly — no real FS or crontab needed.
+  - `StatusFormatter.writer` is private; added `raw_line` for unconditional writes.
+  - `blank_line` / `section_header` / `hint_line` check `self.porcelain` so
+    US-003 porcelain mode can set `porcelain=true` on the formatter to suppress
+    all human-readable lines and emit its own via `raw_line`.
+  - The summary uses `·` (U+00B7 middle dot) and `→` (U+2192) for hint prefix —
+    confirm these render on target terminals before changing.
+---
