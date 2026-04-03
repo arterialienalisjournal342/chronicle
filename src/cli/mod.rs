@@ -2629,19 +2629,26 @@ fn emit_lock_state_section<W: io::Write>(
 /// Arguments for `chronicle doctor`.
 #[derive(Debug, Default, Clone)]
 pub struct DoctorArgs {
-    /// Emit stable machine-readable output; no symbols or color.
-    /// (Full porcelain format implemented in US-003; currently implies --no-color.)
+    /// Emit stable machine-readable output; no symbols or color.  Implies
+    /// `--no-color`.
     pub porcelain: bool,
     /// Suppress ANSI color even when stdout is a TTY.
     pub no_color: bool,
 }
 
-/// Internal struct holding all four doctor check-group results.
-struct DoctorCheckResults {
-    config: Vec<doctor::CheckResult>,
-    git: Vec<doctor::CheckResult>,
-    agents: Vec<doctor::CheckResult>,
-    scheduler: Vec<doctor::CheckResult>,
+/// Check results for all four doctor check groups.
+///
+/// Made public so integration tests can inject controlled results directly
+/// into [`format_doctor_results`] without invoking real FS/network checks.
+pub struct DoctorCheckResults {
+    /// Config check results (config.file, config.toml, config.remote).
+    pub config: Vec<doctor::CheckResult>,
+    /// Git check results (git.repo, git.remote, git.ssh_key).
+    pub git: Vec<doctor::CheckResult>,
+    /// Agent check results (agents.pi, agents.claude).
+    pub agents: Vec<doctor::CheckResult>,
+    /// Scheduler check results (scheduler.cron, scheduler.lock).
+    pub scheduler: Vec<doctor::CheckResult>,
 }
 
 /// Handle `chronicle doctor [--porcelain] [--no-color]`.
@@ -2742,25 +2749,16 @@ fn run_doctor_checks(config_path: &Path, home: &Path) -> DoctorCheckResults {
 /// Format and emit doctor check results to `writer`.
 ///
 /// Pure function (no I/O side effects beyond writing) — called directly by
-/// unit tests with injected [`DoctorCheckResults`].
+/// integration tests with injected [`DoctorCheckResults`].
 ///
 /// Returns the exit code: 0 = all pass, 1 = warnings only, 2 = any error.
-fn format_doctor_results<W: io::Write>(
-    _args: &DoctorArgs,
+pub fn format_doctor_results<W: io::Write>(
+    args: &DoctorArgs,
     results: &DoctorCheckResults,
     use_color: bool,
     writer: &mut W,
 ) -> io::Result<i32> {
-    // Always emit human-readable output for US-002.
-    // --porcelain machine-readable format is implemented in US-003.
-    let mut fmt = StatusFormatter::new(writer, use_color, false);
-
-    emit_doctor_section(&mut fmt, "Config", &results.config)?;
-    emit_doctor_section(&mut fmt, "Git", &results.git)?;
-    emit_doctor_section(&mut fmt, "Agents", &results.agents)?;
-    emit_doctor_section(&mut fmt, "Scheduler", &results.scheduler)?;
-
-    // Compute summary counts (Skipped is excluded from all buckets).
+    // Collect all checks in section order for summary counting.
     let all: Vec<&doctor::CheckResult> = results
         .config
         .iter()
@@ -2769,6 +2767,7 @@ fn format_doctor_results<W: io::Write>(
         .chain(results.scheduler.iter())
         .collect();
 
+    // Compute summary counts (Skipped is excluded from all buckets).
     let errors = all
         .iter()
         .filter(|r| r.state == doctor::CheckState::Error)
@@ -2782,9 +2781,27 @@ fn format_doctor_results<W: io::Write>(
         .filter(|r| r.state == doctor::CheckState::Pass)
         .count();
 
-    fmt.raw_line(&format!(
-        "{errors} errors \u{00b7} {warnings} warnings \u{00b7} {passed} checks passed"
-    ))?;
+    if args.porcelain {
+        // Porcelain mode: emit one `check.<key>=<value>` line per check,
+        // then three summary lines.  No ANSI codes, no symbols.
+        for r in &all {
+            let value = porcelain_check_value(&r.state, &r.detail);
+            writeln!(writer, "check.{}={}", r.key, value)?;
+        }
+        writeln!(writer, "summary.errors={errors}")?;
+        writeln!(writer, "summary.warnings={warnings}")?;
+        writeln!(writer, "summary.passed={passed}")?;
+    } else {
+        // Human-readable mode: sections with symbols and remediation hints.
+        let mut fmt = StatusFormatter::new(writer, use_color, false);
+        emit_doctor_section(&mut fmt, "Config", &results.config)?;
+        emit_doctor_section(&mut fmt, "Git", &results.git)?;
+        emit_doctor_section(&mut fmt, "Agents", &results.agents)?;
+        emit_doctor_section(&mut fmt, "Scheduler", &results.scheduler)?;
+        fmt.raw_line(&format!(
+            "{errors} errors \u{00b7} {warnings} warnings \u{00b7} {passed} checks passed"
+        ))?;
+    }
 
     Ok(if errors > 0 {
         2
@@ -2793,6 +2810,31 @@ fn format_doctor_results<W: io::Write>(
     } else {
         0
     })
+}
+
+/// Format a [`doctor::CheckState`] and detail string as a porcelain value.
+///
+/// Format: `ok[:<detail>]`, `warning:<detail>`, `error:<detail>`,
+/// `skipped[:<reason>]`.
+fn porcelain_check_value(state: &doctor::CheckState, detail: &str) -> String {
+    match state {
+        doctor::CheckState::Pass => {
+            if detail.is_empty() {
+                "ok".to_owned()
+            } else {
+                format!("ok:{detail}")
+            }
+        }
+        doctor::CheckState::Warn => format!("warning:{detail}"),
+        doctor::CheckState::Error => format!("error:{detail}"),
+        doctor::CheckState::Skipped => {
+            if detail.is_empty() {
+                "skipped".to_owned()
+            } else {
+                format!("skipped:{detail}")
+            }
+        }
+    }
 }
 
 /// Emit one doctor section: header, check lines, trailing blank line.
