@@ -13,6 +13,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+## [0.8.3] - 2026-04-03
+
+### Fixed
+- **`chronicle status` pending-files false alarm** — Non-zero pending files
+  was displayed as `⚠ Warn` with *"N file(s) changed since last sync"*,
+  implying something was wrong. Files queued for the next sync cycle are
+  normal operation; the display is now `✓ ok` with *"N file(s) queued for
+  next sync"*.
+- **`chronicle status` stale-lock false error** — An orphaned lock file
+  whose PID has exited was displayed as `✗ Error: stale lock (PID X dead)`.
+  The dead-PID case is now `⚠ Warn: stale — PID X has exited
+  (auto-cleared on next sync)` with `lock_state=stale` in porcelain.
+  A live PID past `lock_timeout_secs` retains `✗ Error` and now emits
+  `lock_state=hung` (previously `lock_state=stale`) to distinguish the
+  two cases for scripts.
+
 ## [0.8.2] - 2026-04-03
 
 ### Fixed
