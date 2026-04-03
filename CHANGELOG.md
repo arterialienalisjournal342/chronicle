@@ -13,6 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+## [0.8.4] - 2026-04-03
+
+### Fixed
+- **Lock file not deleted after clean sync exit** — The advisory lock file
+  (`chronicle.lock`) was released (flock dropped) when a sync completed
+  but never deleted. This caused `chronicle status` and `chronicle doctor`
+  to show a stale-lock warning after *every* successful sync run — the
+  opposite of the intended UX. Introduced `SyncLockGuard`, an RAII type
+  whose `Drop` impl performs a best-effort `fs::remove_file` so the lock
+  file disappears the moment the sync exits cleanly (normal return, early
+  return, or panic unwind). `try_acquire_sync_lock` now returns
+  `Result<Option<SyncLockGuard>>`; call sites are unchanged.
+
 ## [0.8.3] - 2026-04-03
 
 ### Fixed
