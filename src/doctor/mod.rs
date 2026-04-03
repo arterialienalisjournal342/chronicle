@@ -494,7 +494,7 @@ fn is_pid_alive(_pid: u32) -> bool {
 /// | Key                | What is checked |
 /// |--------------------|----------------|
 /// | `scheduler.cron`   | Chronicle crontab entry is installed |
-/// | `scheduler.lock`   | Advisory lock is free or held by a live process |
+/// | `scheduler.lock`   | Advisory lock is free, held by a live process within timeout, or stale with a dead PID (warn) |
 ///
 /// `crontab_lines` — pre-read crontab lines (inject `[]` in tests).
 /// `lock_path`     — path to the advisory lock file.
@@ -552,11 +552,25 @@ pub fn check_scheduler(
 
     let pid_str = pid.map_or_else(|| "?".to_owned(), |p| p.to_string());
 
-    if pid_dead || age_exceeded {
+    if pid_dead {
+        // The process that held the lock has exited — the sync completed (or
+        // crashed). The orphaned file is harmless and is auto-cleared at the
+        // start of the next sync. Report as Warn, not Error, so that a
+        // successfully completed sync does not appear to have failed.
+        results.push(CheckResult::warn(
+            "scheduler.lock",
+            format!("stale lock — PID {pid_str} has exited"),
+            "orphaned lock; auto-cleared on the next sync, or run `chronicle sync` to clear it now",
+        ));
+    } else if age_exceeded {
+        // PID is still alive but has been holding the lock longer than
+        // `lock_timeout_secs`. This indicates a potentially hung sync.
         results.push(CheckResult::error(
             "scheduler.lock",
-            format!("stale lock (PID {pid_str} dead or timed out)"),
-            "delete the lock file or run `chronicle sync` to clear it",
+            format!(
+                "PID {pid_str} has been running for over {lock_timeout_secs}s (possible hung sync)"
+            ),
+            "check whether the process is stuck, then delete the lock file or run `chronicle sync`",
         ));
     } else {
         results.push(CheckResult::warn(
@@ -871,7 +885,7 @@ mod tests {
     }
 
     #[test]
-    fn check_scheduler_stale_lock_returns_error() {
+    fn check_scheduler_stale_lock_dead_pid_returns_warn() {
         let dir = TempDir::new().unwrap();
         let lock_path = dir.path().join("chronicle.lock");
 
@@ -880,9 +894,38 @@ mod tests {
 
         let results = check_scheduler(&cron_installed_lines(), &lock_path, 300);
         assert_eq!(results[1].key, "scheduler.lock");
-        assert_eq!(results[1].state, CheckState::Error, "stale lock → error");
+        // Dead PID = sync finished; lock is orphaned but harmless — Warn, not Error.
+        assert_eq!(
+            results[1].state,
+            CheckState::Warn,
+            "dead PID stale lock → warn"
+        );
         assert!(
             results[1].detail.contains("stale"),
+            "detail: {}",
+            results[1].detail
+        );
+    }
+
+    #[test]
+    fn check_scheduler_live_pid_age_exceeded_returns_error() {
+        let dir = TempDir::new().unwrap();
+        let lock_path = dir.path().join("chronicle.lock");
+
+        // Current PID (definitely alive) + epoch timestamp (age always exceeded).
+        let pid = std::process::id();
+        fs::write(&lock_path, format!("{pid} 1").as_bytes()).unwrap();
+
+        let results = check_scheduler(&cron_installed_lines(), &lock_path, 300);
+        assert_eq!(results[1].key, "scheduler.lock");
+        // Live process held the lock past the timeout — possible hung sync → Error.
+        assert_eq!(
+            results[1].state,
+            CheckState::Error,
+            "live PID past timeout → error"
+        );
+        assert!(
+            results[1].detail.contains("hung sync"),
             "detail: {}",
             results[1].detail
         );
