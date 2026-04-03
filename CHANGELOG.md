@@ -13,6 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+## [0.8.1] - 2026-04-03
+
+### Fixed
+- **`chronicle doctor` stale-lock false positive** — A lock file whose
+  PID has exited (sync completed normally) was reported as `✗ Error`,
+  implying the operation failed. It is now reported as `⚠ Warn` with the
+  message *"stale lock — PID X has exited"* and a hint that the file is
+  auto-cleared on the next sync. Only a lock held by a **live** process
+  past `lock_timeout_secs` retains the `✗ Error` severity (possible hung
+  sync). One existing test renamed and updated; one new test added for
+  the live-PID-past-timeout error path.
+
 ## [0.8.0] - 2026-04-03
 
 ### Added
