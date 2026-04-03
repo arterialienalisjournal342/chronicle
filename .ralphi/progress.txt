@@ -1,4 +1,8 @@
 ## Codebase Patterns
+- **emit_* section pattern**: each status section is a private `fn emit_<name>_section<W: io::Write>(fmt, ...) -> io::Result<()>`. Wired in `status_write` after config is loaded. Errors within a section use `fmt.warn/err` (never propagate) — status always succeeds.
+- **Read-only status rule**: `emit_pending_files_section` and `emit_lock_state_section` are strictly read-only; they load state files but never write them.
+- **Lock state logic**: lock file format is `"<PID> <UNIX_TIMESTAMP>"`. Stale = `pid_dead || age_exceeded`. Use `.is_some_and(|p| !is_process_alive(p))` for dead-PID check (clippy prefers `is_some_and` over `map_or(false, ...)`). `#[allow(clippy::cast_sign_loss)]` on a `let` statement (not on an expression — that is a nightly-only feature).
+- **SystemTime → DateTime<Utc>**: use `(std::time::UNIX_EPOCH + std::time::Duration::from_secs(ts)).into()` to convert a u64 Unix timestamp — avoids extra chrono imports and is free of deprecation warnings.
 - **Status formatter pattern**: `StatusFormatter<W: io::Write>` takes a generic writer for testability. Tests pass `&mut Vec<u8>` to capture output. `ok/warn/err` are no-ops in porcelain mode; `kv` is a no-op outside porcelain mode. Color codes (ANSI_GREEN/YELLOW/RED/RESET constants) applied to the symbol only.
 - **should_use_color helper**: `pub fn should_use_color(no_color_flag: bool) -> bool` — checks flag, then `NO_COLOR` env var, then `io::stdout().is_terminal()`. Marked `#[must_use]`.
 - **Private inner write function**: `status_write<W: io::Write>(args, config_path, home, use_color, writer)` is private but accessible from `mod tests` (child modules can access parent private items in Rust). Allows output capture without spawning a process.
@@ -54,4 +58,23 @@ Corrective Plan: N/A
   - `config::Config` is accessible because `config/mod.rs` re-exports it with `pub use schema::Config`
   - `if !a && !b { ...block } else { ... }` pattern triggers `clippy::collapsible_else_if` \u2014 use `if/else if` chains instead
   - The `emit_config_machine_section` returns `io::Result<()>`; callers in `status_write` use `?` which coerces `io::Error` to `anyhow::Error` automatically
+---
+
+## 2026-04-03 - US-003
+Session: N/A
+Review Outcome: PASS
+Trajectory: ON_TRACK
+Trajectory Notes: N/A
+Corrective Plan: N/A
+- Added `emit_last_sync_section` — reads `sync_state.json` via `read_sync_state()`; emits ✓ + timestamp+duration or ⚠ "never"; porcelain keys `last_sync_time` and `last_sync_duration_ms`
+- Added `emit_pending_files_section` — loads `state.json` via `StateCache::load`, runs `scan_dir` for each enabled agent, counts non-Unchanged entries; emits ✓ "none" or ⚠ "N file(s) changed"; porcelain key `pending_files`; read-only (no cache write)
+- Added `emit_lock_state_section` — reads `chronicle.lock` format `"<PID> <UNIX_TIMESTAMP>"`; checks PID liveness with `is_process_alive` and age against `lock_timeout_secs`; emits ✓ "free", ⚠ "held by PID N since ts", or ✗ "stale lock (PID N dead)"; porcelain key `lock_state`
+- Updated `status_write` to derive `repo_path` from config and call all three new functions
+- Added 10 unit tests: last-sync-present, last-sync-absent, last-sync-porcelain, pending-files-zero, pending-files-nonzero, pending-files-porcelain, lock-free, lock-held-live, lock-stale, lock-porcelain
+- All 390 tests pass; clippy, fmt, deny clean
+- **Learnings for future iterations:**
+  - `map_or(false, |x| ...)` → clippy::unnecessary_map_or → use `.is_some_and(|x| ...)` instead
+  - `#[allow(clippy::cast_sign_loss)]` must be on a `let` statement, not on an expression (expression attributes are nightly-only, E0658)
+  - For stale-lock test, use own PID + timestamp=0 (year 1970); age >> default 300s → age_exceeded fires deterministically
+  - `(UNIX_EPOCH + Duration::from_secs(ts)).into::<DateTime<Utc>>()` is the cleanest way to convert u64 Unix seconds to DateTime<Utc> without extra imports
 ---

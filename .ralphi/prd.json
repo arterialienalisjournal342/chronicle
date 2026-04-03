@@ -63,15 +63,15 @@
         "cargo test && cargo clippy -- -D warnings && cargo fmt --check pass"
       ],
       "priority": 3,
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "US-001",
         "US-002"
       ],
       "notes": "Re-use the PID liveness check already implemented for stale lock recovery (src/git/mod.rs). Do not trigger a new scan write — status must be read-only with respect to state files.",
       "startedAt": "2026-04-03T03:15:48.648Z",
-      "updatedAt": "2026-04-03T03:15:48.648Z",
-      "completedAt": null
+      "updatedAt": "2026-04-03T03:30:00.000Z",
+      "completedAt": "2026-04-03T03:30:00.000Z"
     },
     {
       "id": "US-004",
