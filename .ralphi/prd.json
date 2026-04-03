@@ -44,8 +44,8 @@
       "dependsOn": [],
       "notes": "Used manual ANSI codes (no new dependency). TTY detection via std::io::IsTerminal. StatusFormatter<W: io::Write> for testable output. status_write() inner fn captures output in tests.",
       "startedAt": "2026-04-03T03:00:44.894Z",
-      "updatedAt": "2026-04-03T03:11:00.000Z",
-      "completedAt": "2026-04-03T03:11:00.000Z"
+      "updatedAt": "2026-04-03T03:15:48.646Z",
+      "completedAt": "2026-04-03T03:15:48.646Z"
     },
     {
       "id": "US-003",
@@ -63,12 +63,15 @@
         "cargo test && cargo clippy -- -D warnings && cargo fmt --check pass"
       ],
       "priority": 3,
-      "status": "open",
+      "status": "in_progress",
       "dependsOn": [
         "US-001",
         "US-002"
       ],
-      "notes": "Re-use the PID liveness check already implemented for stale lock recovery (src/git/mod.rs). Do not trigger a new scan write — status must be read-only with respect to state files."
+      "notes": "Re-use the PID liveness check already implemented for stale lock recovery (src/git/mod.rs). Do not trigger a new scan write — status must be read-only with respect to state files.",
+      "startedAt": "2026-04-03T03:15:48.648Z",
+      "updatedAt": "2026-04-03T03:15:48.648Z",
+      "completedAt": null
     },
     {
       "id": "US-004",

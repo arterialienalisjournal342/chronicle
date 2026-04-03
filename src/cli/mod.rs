@@ -2190,6 +2190,10 @@ fn status_write<W: io::Write>(
     match config::load(Some(config_path), &CliOverrides::default()) {
         Ok(cfg) => {
             emit_config_machine_section(&mut fmt, &cfg, home)?;
+            let repo_path = config::expand_path_with_home(&cfg.storage.repo_path, home);
+            emit_last_sync_section(&mut fmt, &repo_path)?;
+            emit_pending_files_section(&mut fmt, &cfg, home, &repo_path)?;
+            emit_lock_state_section(&mut fmt, &cfg, &repo_path)?;
         }
         Err(e) => {
             fmt.err("Config", &format!("failed to load: {e}"))?;
@@ -2267,6 +2271,169 @@ fn emit_config_machine_section<W: io::Write>(
     } else {
         fmt.kv("config_ok", "false")?;
         fmt.kv("config_error", &config_errors.join("; "))?;
+    }
+
+    Ok(())
+}
+
+/// Emit the Last Sync section of `chronicle status`.
+///
+/// Reads `sync_state.json` (written by US-001).  Shows timestamp + duration
+/// on `✓` when the file exists; `⚠ never` when it is absent.
+fn emit_last_sync_section<W: io::Write>(
+    fmt: &mut StatusFormatter<W>,
+    repo_path: &Path,
+) -> io::Result<()> {
+    match crate::sync_state::read_sync_state(repo_path) {
+        Ok(Some(state)) => {
+            let ts = state.last_sync_time.format("%Y-%m-%d %H:%M:%S UTC");
+            let ms = state.last_sync_duration_ms;
+            fmt.ok("Last Sync", &format!("{ts}  ({ms}ms)"))?;
+            fmt.kv("last_sync_time", &state.last_sync_time.to_rfc3339())?;
+            fmt.kv("last_sync_duration_ms", &ms.to_string())?;
+        }
+        Ok(None) => {
+            fmt.warn("Last Sync", "never")?;
+            fmt.kv("last_sync_time", "")?;
+            fmt.kv("last_sync_duration_ms", "")?;
+        }
+        Err(e) => {
+            fmt.warn("Last Sync", &format!("error reading sync state: {e}"))?;
+            fmt.kv("last_sync_time", "")?;
+            fmt.kv("last_sync_duration_ms", "")?;
+        }
+    }
+    Ok(())
+}
+
+/// Emit the Pending Files section of `chronicle status`.
+///
+/// Uses `scan_dir` against the persisted `state.json` cache to count files
+/// whose mtime/size has changed since the last sync.  This function is
+/// **read-only** — it never writes the state cache.
+fn emit_pending_files_section<W: io::Write>(
+    fmt: &mut StatusFormatter<W>,
+    cfg: &config::Config,
+    home: &Path,
+    repo_path: &Path,
+) -> io::Result<()> {
+    let cache_path = scan::StateCache::path_for_repo(repo_path);
+    let state_cache = match scan::StateCache::load(&cache_path) {
+        Ok(c) => c,
+        Err(e) => {
+            fmt.warn("Pending Files", &format!("error reading state cache: {e}"))?;
+            fmt.kv("pending_files", "")?;
+            return Ok(());
+        }
+    };
+
+    let mut pending_count = 0usize;
+    let follow_symlinks = cfg.general.follow_symlinks;
+
+    if cfg.agents.pi.enabled {
+        let source_dir = config::expand_path_with_home(&cfg.agents.pi.session_dir, home);
+        if source_dir.exists() {
+            if let Ok(entries) = scan::scan_dir(&source_dir, &state_cache, follow_symlinks) {
+                pending_count += entries
+                    .iter()
+                    .filter(|e| e.kind != scan::ChangeKind::Unchanged)
+                    .count();
+            }
+        }
+    }
+
+    if cfg.agents.claude.enabled {
+        let source_dir = config::expand_path_with_home(&cfg.agents.claude.session_dir, home);
+        if source_dir.exists() {
+            if let Ok(entries) = scan::scan_dir(&source_dir, &state_cache, follow_symlinks) {
+                pending_count += entries
+                    .iter()
+                    .filter(|e| e.kind != scan::ChangeKind::Unchanged)
+                    .count();
+            }
+        }
+    }
+
+    if pending_count == 0 {
+        fmt.ok("Pending Files", "none")?;
+    } else {
+        fmt.warn(
+            "Pending Files",
+            &format!("{pending_count} file(s) changed since last sync"),
+        )?;
+    }
+    fmt.kv("pending_files", &pending_count.to_string())?;
+    Ok(())
+}
+
+/// Emit the Lock State section of `chronicle status`.
+///
+/// Reads `chronicle.lock`, checks whether it is free, held by a live PID,
+/// or stale (dead PID / age exceeds `lock_timeout_secs`).  This function
+/// is **read-only** — it never removes the lock file.
+fn emit_lock_state_section<W: io::Write>(
+    fmt: &mut StatusFormatter<W>,
+    cfg: &config::Config,
+    repo_path: &Path,
+) -> io::Result<()> {
+    let lock_path = lock_file_path(repo_path);
+
+    if !lock_path.exists() {
+        fmt.ok("Lock State", "free")?;
+        fmt.kv("lock_state", "free")?;
+        return Ok(());
+    }
+
+    // Read PID and Unix timestamp from the lock file content.
+    let contents = match fs::read_to_string(&lock_path) {
+        Ok(c) => c,
+        Err(_) => {
+            // Cannot read — treat as free (no held lock visible).
+            fmt.ok("Lock State", "free")?;
+            fmt.kv("lock_state", "free")?;
+            return Ok(());
+        }
+    };
+
+    let mut parts = contents.split_whitespace();
+    let pid: Option<u32> = parts.next().and_then(|s| s.parse().ok());
+    let stamp: Option<u64> = parts.next().and_then(|s| s.parse().ok());
+
+    // Check 1: Is the holder PID dead?
+    let pid_dead = pid.is_some_and(|p| !is_process_alive(p));
+
+    // Check 2: Has the lock age exceeded the configured timeout?
+    let lock_timeout_secs = cfg.general.lock_timeout_secs;
+    #[allow(clippy::cast_sign_loss)]
+    let lock_timeout_u64 = lock_timeout_secs as u64;
+    let age_exceeded = lock_timeout_secs > 0
+        && stamp.is_some_and(|ts| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            now.saturating_sub(ts) > lock_timeout_u64
+        });
+
+    let pid_str = pid.map_or_else(|| "?".to_owned(), |p| p.to_string());
+
+    if pid_dead || age_exceeded {
+        fmt.err("Lock State", &format!("stale lock (PID {pid_str} dead)"))?;
+        fmt.kv("lock_state", "stale")?;
+    } else {
+        let ts_str = stamp.map_or_else(
+            || "unknown time".to_owned(),
+            |ts| {
+                let dt: DateTime<Utc> =
+                    (std::time::UNIX_EPOCH + std::time::Duration::from_secs(ts)).into();
+                dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+            },
+        );
+        fmt.warn(
+            "Lock State",
+            &format!("held by PID {pid_str} since {ts_str}"),
+        )?;
+        fmt.kv("lock_state", "held")?;
     }
 
     Ok(())
@@ -4587,6 +4754,331 @@ mod tests {
             "porcelain must emit config_ok=true when all is healthy"
         );
         assert!(!out.contains("✓"), "porcelain mode must not emit symbols");
+    }
+
+    // --- US-003: last-sync, pending-files, lock-state sections -------------
+
+    #[test]
+    fn status_last_sync_present_emits_ok() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let repo_path = dir.path().join("repo");
+        let pi_sessions = dir.path().join("pi_sessions");
+        let home = dir.path().to_path_buf();
+
+        std::fs::create_dir_all(&pi_sessions).unwrap();
+        write_status_config(&config_path, &repo_path, &pi_sessions, "test-machine");
+
+        // Write a sync_state.json so Last Sync has data.
+        crate::sync_state::write_sync_state(
+            &repo_path,
+            crate::sync_state::SyncOp::Sync,
+            std::time::Duration::from_millis(1234),
+        )
+        .unwrap();
+
+        let args = StatusArgs {
+            no_color: true,
+            ..Default::default()
+        };
+        let mut buf = Vec::<u8>::new();
+        status_write(&args, &config_path, &home, false, &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(
+            out.contains("Last Sync"),
+            "output must contain 'Last Sync' label; got: {out}"
+        );
+        // The Last Sync ✓ line should be present (no ⚠ "never" line).
+        assert!(
+            !out.contains("never"),
+            "last-sync-present must not show 'never'; got: {out}"
+        );
+        assert!(
+            out.contains("1234ms"),
+            "last-sync-present must include duration; got: {out}"
+        );
+    }
+
+    #[test]
+    fn status_last_sync_absent_emits_warn() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let repo_path = dir.path().join("repo");
+        let pi_sessions = dir.path().join("pi_sessions");
+        let home = dir.path().to_path_buf();
+
+        std::fs::create_dir_all(&pi_sessions).unwrap();
+        write_status_config(&config_path, &repo_path, &pi_sessions, "test-machine");
+        // Do NOT write sync_state.json.
+
+        let args = StatusArgs {
+            no_color: true,
+            ..Default::default()
+        };
+        let mut buf = Vec::<u8>::new();
+        status_write(&args, &config_path, &home, false, &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(
+            out.contains("never"),
+            "last-sync-absent must show 'never'; got: {out}"
+        );
+    }
+
+    #[test]
+    fn status_last_sync_porcelain_keys_present() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let repo_path = dir.path().join("repo");
+        let pi_sessions = dir.path().join("pi_sessions");
+        let home = dir.path().to_path_buf();
+
+        std::fs::create_dir_all(&pi_sessions).unwrap();
+        write_status_config(&config_path, &repo_path, &pi_sessions, "test-machine");
+
+        // Write sync_state so last_sync_time is non-empty.
+        crate::sync_state::write_sync_state(
+            &repo_path,
+            crate::sync_state::SyncOp::Push,
+            std::time::Duration::from_millis(500),
+        )
+        .unwrap();
+
+        let args = StatusArgs {
+            porcelain: true,
+            ..Default::default()
+        };
+        let mut buf = Vec::<u8>::new();
+        status_write(&args, &config_path, &home, false, &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(
+            out.contains("last_sync_time="),
+            "porcelain must emit last_sync_time=; got: {out}"
+        );
+        assert!(
+            out.contains("last_sync_duration_ms=500"),
+            "porcelain must emit last_sync_duration_ms=500; got: {out}"
+        );
+    }
+
+    #[test]
+    fn status_pending_files_zero_emits_ok() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let repo_path = dir.path().join("repo");
+        let pi_sessions = dir.path().join("pi_sessions");
+        let home = dir.path().to_path_buf();
+
+        // Create a session file.
+        let session_sub = pi_sessions.join("--proj--");
+        std::fs::create_dir_all(&session_sub).unwrap();
+        let file = session_sub.join("s.jsonl");
+        std::fs::write(&file, b"{}\n").unwrap();
+
+        write_status_config(&config_path, &repo_path, &pi_sessions, "test-machine");
+
+        // Populate state cache so the file is seen as Unchanged.
+        let meta = std::fs::metadata(&file).unwrap();
+        let mtime = crate::scan::FileState {
+            local_mtime: chrono::DateTime::<chrono::Utc>::from(meta.modified().unwrap()),
+            local_size: meta.len(),
+            last_synced_size: meta.len(),
+            local_path: file.clone(),
+        };
+        let mut cache = crate::scan::StateCache::default();
+        cache
+            .files
+            .insert(file.to_string_lossy().into_owned(), mtime);
+        let cache_path = crate::scan::StateCache::path_for_repo(&repo_path);
+        cache.save(&cache_path).unwrap();
+
+        let args = StatusArgs {
+            no_color: true,
+            ..Default::default()
+        };
+        let mut buf = Vec::<u8>::new();
+        status_write(&args, &config_path, &home, false, &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(
+            out.contains("Pending Files"),
+            "output must contain 'Pending Files'; got: {out}"
+        );
+        assert!(
+            out.contains("none"),
+            "pending-files-zero must show 'none'; got: {out}"
+        );
+    }
+
+    #[test]
+    fn status_pending_files_nonzero_emits_warn() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let repo_path = dir.path().join("repo");
+        let pi_sessions = dir.path().join("pi_sessions");
+        let home = dir.path().to_path_buf();
+
+        // Create a session file — state cache is EMPTY so the file is New.
+        let session_sub = pi_sessions.join("--proj--");
+        std::fs::create_dir_all(&session_sub).unwrap();
+        std::fs::write(session_sub.join("s.jsonl"), b"{}\n").unwrap();
+
+        write_status_config(&config_path, &repo_path, &pi_sessions, "test-machine");
+        // No state cache written → all files are New → pending_count = 1.
+
+        let args = StatusArgs {
+            no_color: true,
+            ..Default::default()
+        };
+        let mut buf = Vec::<u8>::new();
+        status_write(&args, &config_path, &home, false, &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(
+            out.contains("changed since last sync"),
+            "pending-files-nonzero must mention 'changed since last sync'; got: {out}"
+        );
+    }
+
+    #[test]
+    fn status_pending_files_porcelain_key() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let repo_path = dir.path().join("repo");
+        let pi_sessions = dir.path().join("pi_sessions");
+        let home = dir.path().to_path_buf();
+
+        std::fs::create_dir_all(&pi_sessions).unwrap();
+        write_status_config(&config_path, &repo_path, &pi_sessions, "test-machine");
+
+        let args = StatusArgs {
+            porcelain: true,
+            ..Default::default()
+        };
+        let mut buf = Vec::<u8>::new();
+        status_write(&args, &config_path, &home, false, &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(
+            out.contains("pending_files="),
+            "porcelain must emit pending_files=; got: {out}"
+        );
+    }
+
+    #[test]
+    fn status_lock_free_emits_ok() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let repo_path = dir.path().join("repo");
+        let pi_sessions = dir.path().join("pi_sessions");
+        let home = dir.path().to_path_buf();
+
+        std::fs::create_dir_all(&pi_sessions).unwrap();
+        write_status_config(&config_path, &repo_path, &pi_sessions, "test-machine");
+        // No lock file exists — lock is free.
+
+        let args = StatusArgs {
+            no_color: true,
+            ..Default::default()
+        };
+        let mut buf = Vec::<u8>::new();
+        status_write(&args, &config_path, &home, false, &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(
+            out.contains("Lock State"),
+            "output must contain 'Lock State'; got: {out}"
+        );
+        assert!(
+            out.contains("free"),
+            "lock-free must show 'free'; got: {out}"
+        );
+    }
+
+    #[test]
+    fn status_lock_held_live_emits_warn() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let repo_path = dir.path().join("repo");
+        let pi_sessions = dir.path().join("pi_sessions");
+        let home = dir.path().to_path_buf();
+
+        std::fs::create_dir_all(&pi_sessions).unwrap();
+        write_status_config(&config_path, &repo_path, &pi_sessions, "test-machine");
+
+        // Write a lock file held by the current (live) process with a
+        // fresh timestamp so neither the age check nor the PID check fires.
+        let lock_path = lock_file_path(&repo_path);
+        std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let own_pid = std::process::id();
+        std::fs::write(&lock_path, format!("{own_pid} {now_secs}")).unwrap();
+
+        let args = StatusArgs {
+            no_color: true,
+            ..Default::default()
+        };
+        let mut buf = Vec::<u8>::new();
+        status_write(&args, &config_path, &home, false, &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(
+            out.contains("held by PID"),
+            "lock-held-live must show 'held by PID'; got: {out}"
+        );
+    }
+
+    #[test]
+    fn status_lock_stale_emits_err() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let repo_path = dir.path().join("repo");
+        let pi_sessions = dir.path().join("pi_sessions");
+        let home = dir.path().to_path_buf();
+
+        std::fs::create_dir_all(&pi_sessions).unwrap();
+        write_status_config(&config_path, &repo_path, &pi_sessions, "test-machine");
+
+        // Write a lock file with the current PID but timestamp 0 (Unix epoch).
+        // Age = now - 0 >> 300 s (default lock_timeout_secs), so age_exceeded fires.
+        let lock_path = lock_file_path(&repo_path);
+        std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+        let own_pid = std::process::id();
+        std::fs::write(&lock_path, format!("{own_pid} 0")).unwrap();
+
+        let args = StatusArgs {
+            no_color: true,
+            ..Default::default()
+        };
+        let mut buf = Vec::<u8>::new();
+        status_write(&args, &config_path, &home, false, &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(
+            out.contains("stale lock"),
+            "lock-stale must show 'stale lock'; got: {out}"
+        );
+    }
+
+    #[test]
+    fn status_lock_porcelain_key() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let repo_path = dir.path().join("repo");
+        let pi_sessions = dir.path().join("pi_sessions");
+        let home = dir.path().to_path_buf();
+
+        std::fs::create_dir_all(&pi_sessions).unwrap();
+        write_status_config(&config_path, &repo_path, &pi_sessions, "test-machine");
+        // No lock file → state = free.
+
+        let args = StatusArgs {
+            porcelain: true,
+            ..Default::default()
+        };
+        let mut buf = Vec::<u8>::new();
+        status_write(&args, &config_path, &home, false, &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(
+            out.contains("lock_state=free"),
+            "porcelain must emit lock_state=free; got: {out}"
+        );
     }
 
     // --- errors -------------------------------------------------------------
