@@ -15,6 +15,7 @@ use crate::materialize_cache::{MaterializeCache, MaterializeFileState};
 use crate::merge::set_union::{merge_jsonl, NullReporter};
 use crate::scan;
 use crate::scheduler::cron as scheduler_cron;
+use crate::sync_state::{self, SyncOp};
 
 // ---------------------------------------------------------------------------
 // chronicle init
@@ -651,6 +652,7 @@ pub fn sync_impl(dry_run: bool, quiet: bool, config_path: &Path, home: &Path) ->
             return Ok(());
         }
     };
+    let sync_op_start = std::time::Instant::now();
 
     // -----------------------------------------------------------------------
     // Load state cache (missing file → empty; all files treated as New).
@@ -917,6 +919,12 @@ pub fn sync_impl(dry_run: bool, quiet: bool, config_path: &Path, home: &Path) ->
         .save(&cache_path)
         .context("failed to save state cache")?;
 
+    // Record last-sync metadata for `chronicle status` (US-001).
+    if let Err(e) = sync_state::write_sync_state(&repo_path, SyncOp::Sync, sync_op_start.elapsed())
+    {
+        tracing::warn!("failed to write sync_state.json: {e}");
+    }
+
     if !quiet {
         println!("Sync complete.");
     }
@@ -1001,6 +1009,7 @@ pub fn push_impl(dry_run: bool, config_path: &Path, home: &Path) -> Result<()> {
             return Ok(());
         }
     };
+    let push_op_start = std::time::Instant::now();
 
     // Load state cache (missing file → empty cache; all files treated as New).
     // Derive the path from the repo dir so each install gets its own cache.
@@ -1199,6 +1208,12 @@ pub fn push_impl(dry_run: bool, config_path: &Path, home: &Path) -> Result<()> {
     state_cache
         .save(&cache_path)
         .context("failed to save state cache")?;
+
+    // Record last-sync metadata for `chronicle status` (US-001).
+    if let Err(e) = sync_state::write_sync_state(&repo_path, SyncOp::Push, push_op_start.elapsed())
+    {
+        tracing::warn!("failed to write sync_state.json: {e}");
+    }
 
     Ok(())
 }
@@ -1423,6 +1438,7 @@ pub fn pull_impl(dry_run: bool, config_path: &Path, home: &Path) -> Result<()> {
             return Ok(());
         }
     };
+    let pull_op_start = std::time::Instant::now();
 
     let manager = git::RepoManager::init_or_open(&repo_path, remote_url, &cfg.storage.branch)
         .context("failed to open git repository")?;
@@ -1468,6 +1484,13 @@ pub fn pull_impl(dry_run: bool, config_path: &Path, home: &Path) -> Result<()> {
             integrated, materialized
         );
     }
+
+    // Record last-sync metadata for `chronicle status` (US-001).
+    if let Err(e) = sync_state::write_sync_state(&repo_path, SyncOp::Pull, pull_op_start.elapsed())
+    {
+        tracing::warn!("failed to write sync_state.json: {e}");
+    }
+
     Ok(())
 }
 
