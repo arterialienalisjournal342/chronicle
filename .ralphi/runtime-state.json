@@ -322,7 +322,7 @@
     {
       "id": "iter-230fbbcf",
       "phase": "ralphi-loop-iteration",
-      "status": "running",
+      "status": "completed",
       "sessionKey": "/Users/bradmatic/.pi/agent/sessions/--Users-bradmatic-Dev-geekmuse-chronicle--/2026-04-03T04-24-57-406Z_ab65377b-1cac-4cc7-8f78-f6fa28704d82.jsonl",
       "sessionFile": "/Users/bradmatic/.pi/agent/sessions/--Users-bradmatic-Dev-geekmuse-chronicle--/2026-04-03T04-24-57-406Z_ab65377b-1cac-4cc7-8f78-f6fa28704d82.jsonl",
       "checkpointLeafId": null,
@@ -333,7 +333,20 @@
       "loopId": "loop-e7f6d4fb",
       "iteration": 2,
       "storyId": "US-002",
-      "storyTitle": "DoctorArgs CLI wiring and human-readable output formatter"
+      "storyTitle": "DoctorArgs CLI wiring and human-readable output formatter",
+      "summary": "Implemented US-002: wired `chronicle doctor` into the CLI with DoctorArgs { porcelain, no_color }, layered handle_doctor/doctor_impl/doctor_write entry points, run_doctor_checks (live FS/network/crontab collection), and format_doctor_results (pure formatter). Extended StatusFormatter<W> with section_header/hint_line/skipped_check/blank_line/raw_line. Enforced exit codes 0/1/2 and color suppression via NO_COLOR/--no-color/--porcelain. Committed as feat(cli): US-002 — DoctorArgs CLI wiring and human-readable output formatter (ca59b15). State reconstructed post-hoc from git history + progress.txt.",
+      "outputs": [
+        "src/main.rs",
+        "src/cli/mod.rs",
+        ".ralphi/prd.json",
+        ".ralphi/progress.txt"
+      ],
+      "complete": false,
+      "reviewPasses": 1,
+      "trajectory": "ON_TRACK",
+      "reflectionSummary": "US-002 acceptance criteria satisfied. format_doctor_results takes DoctorCheckResults by value so unit tests inject fakes without real FS/crontab. StatusFormatter.raw_line added for unconditional writes so US-003 porcelain mode can suppress human lines and emit its own. Section_header/hint_line/blank_line honour self.porcelain.",
+      "nextIterationPlan": "US-003: --porcelain key=value output, integration tests, and exit-code enforcement. Set porcelain=true on the formatter to suppress human-readable lines; emit stable key=value pairs for every check via raw_line. Add integration tests asserting exit codes 0/1/2 across pass/warn/error scenarios.",
+      "completedAt": "2026-04-03T04:34:18.000Z"
     }
   ],
   "loops": [
@@ -373,15 +386,14 @@
       "controllerSessionFile": "/Users/bradmatic/.pi/agent/sessions/--Users-bradmatic-Dev-geekmuse-chronicle--/2026-04-03T01-59-41-045Z_b5d09f97-d64e-4382-b985-c2ffd21426e4.jsonl",
       "maxIterations": 50,
       "iteration": 2,
-      "active": true,
+      "active": false,
       "stopRequested": false,
       "createdAt": "2026-04-03T04:13:24.393Z",
       "iterationSessionFiles": [
         "/Users/bradmatic/.pi/agent/sessions/--Users-bradmatic-Dev-geekmuse-chronicle--/2026-04-03T04-13-24-394Z_08a2ee46-661d-4ac5-9efc-c7abb00e3e20.jsonl",
         "/Users/bradmatic/.pi/agent/sessions/--Users-bradmatic-Dev-geekmuse-chronicle--/2026-04-03T04-24-57-406Z_ab65377b-1cac-4cc7-8f78-f6fa28704d82.jsonl"
       ],
-      "currentIterationStartedAt": "2026-04-03T04:24:57.406Z",
-      "activeIterationSessionFile": "/Users/bradmatic/.pi/agent/sessions/--Users-bradmatic-Dev-geekmuse-chronicle--/2026-04-03T04-24-57-406Z_ab65377b-1cac-4cc7-8f78-f6fa28704d82.jsonl"
+      "completedAt": "2026-04-03T04:47:30.000Z"
     }
   ],
   "savedAt": "2026-04-03T04:24:57.407Z"
