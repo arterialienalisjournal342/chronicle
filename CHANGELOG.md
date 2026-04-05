@@ -13,6 +13,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+## [0.8.5] - 2026-04-05
+
+### Fixed
+- **L3 canon/decanon round-trip invariant violated on adjacent home paths**
+  — When two home-directory paths appear back-to-back in freeform text
+  (e.g. `/Users/alice/Users/alice/Dev/foo` — a subdirectory that happens
+  to share the home's name), canonicalization correctly produces
+  `{{SYNC_HOME}}{{SYNC_HOME}}/Dev/foo`, but de-canonicalization only
+  replaced the *second* token. Its trailing-`/` boundary check left the
+  first `{{SYNC_HOME}}` in place because the character following it was
+  `{` (the start of the next token), not `/`. Result: the round-trip
+  produced `{{SYNC_HOME}}/Users/alice/Dev/foo` — corrupt content.
+  Decanon now performs unconditional sentinel-token replacement, matching
+  the canon-side invariant that tokens are unique markers inserted only
+  by canon. Found by the scheduled libFuzzer target `fuzz_roundtrip`
+  (GitHub Actions run 23993095694). Crash input added to the seed
+  corpus as a permanent regression case, plus two new proptest templates
+  (`{home}{p1}`, `{home}{home}{p1}`).
+
 ## [0.8.4] - 2026-04-03
 
 ### Fixed

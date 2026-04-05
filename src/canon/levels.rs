@@ -273,6 +273,25 @@ mod tests {
     }
 
     #[test]
+    fn l3_round_trip_adjacent_home_paths() {
+        // Regression test for the fuzz crash found by the scheduled fuzz
+        // workflow (GitHub Actions run 23993095694): when two home paths
+        // appear back-to-back in freeform text, canon produces adjacent
+        // `{{SYNC_HOME}}{{SYNC_HOME}}` tokens, and decanon must replace
+        // both of them to preserve the round-trip invariant.
+        let reg = reg("/Users/testuser");
+        let line = r#"{"content":"path /Users/testuser/Users/testuser/Dev/foo end"}"#;
+        let canonical = reg.canonicalize_line(line, 3).unwrap();
+        let restored = reg.decanonicalize_line(&canonical).unwrap();
+        let orig: serde_json::Value = serde_json::from_str(line).unwrap();
+        let rest: serde_json::Value = serde_json::from_str(&restored).unwrap();
+        assert_eq!(
+            orig, rest,
+            "adjacent home-paths round-trip failed: canon={canonical:?}"
+        );
+    }
+
+    #[test]
     fn l3_round_trip() {
         let reg = reg("/Users/bradmatic");
         let line = r#"{"content":"output: /Users/bradmatic/Dev/foo","cwd":"/Users/bradmatic/p"}"#;
@@ -533,6 +552,12 @@ mod tests {
                 format!("<file path=\"{p1}\"/>"),
                 // 6. URL-then-path context
                 format!("See https://example.com and {p1}"),
+                // 7. home-named subdirectory adjacent to home
+                //    (regression for GitHub Actions run 23993095694)
+                //    canon emits `{{SYNC_HOME}}{{SYNC_HOME}}/...` back-to-back
+                format!("{home}{p1}"),
+                // 8. three adjacent home occurrences
+                format!("{home}{home}{p1}"),
             ];
 
             for tmpl in &templates {

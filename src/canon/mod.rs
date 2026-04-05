@@ -410,6 +410,14 @@ impl TokenRegistry {
     /// 1. Revert custom tokens (most-specific canonical form first).
     /// 2. Revert `{{SYNC_HOME}}` to the local home directory.
     ///
+    /// Unlike `try_canonicalize_text`, this does **not** enforce a trailing
+    /// `/` boundary after each match: tokens like `{{SYNC_HOME}}` are unique
+    /// sentinels (never legitimate user text per spec), and canon may emit
+    /// them directly adjacent to one another (e.g. when two home paths
+    /// appear back-to-back in freeform text, canon produces
+    /// `{{SYNC_HOME}}{{SYNC_HOME}}/...`).  A boundary check here would leave
+    /// the first token unreplaced and break the round-trip invariant.
+    ///
     /// Returns `Some(new_value)` if the string changed, `None` otherwise.
     pub(crate) fn try_decanonicalize_text(&self, s: &str) -> Option<String> {
         let home = self.home.to_string_lossy();
@@ -418,11 +426,11 @@ impl TokenRegistry {
         let mut result = s.to_owned();
         for (token_name, token_value) in &self.custom_tokens {
             let cv = canonical_token_value(token_value, &home, &self.home_token);
-            result = replace_in_text(&result, token_name, &cv);
+            result = result.replace(token_name, &cv);
         }
 
         // Step 2: Revert {{SYNC_HOME}}.
-        result = replace_in_text(&result, &self.home_token, &home);
+        result = result.replace(self.home_token.as_str(), home.as_ref());
 
         if result == s {
             None
@@ -842,6 +850,22 @@ mod tests {
     fn replace_in_text_empty_from_returns_original() {
         let s = "some text";
         assert_eq!(replace_in_text(s, "", "TOKEN"), s);
+    }
+
+    #[test]
+    fn repro_fuzz_crash_adjacent_home_paths() {
+        // Fuzz crash (actions run 23993095694): adjacent home paths in L3
+        // freeform text break the round-trip invariant. Canon produces
+        // `{{SYNC_HOME}}{{SYNC_HOME}}/Dev/foo`, decanon only replaces one.
+        let reg = registry("/Users/testuser");
+        let input = "/Users/testuser/Users/testuser/Dev/foo";
+        let canonical = reg
+            .try_canonicalize_text(input)
+            .unwrap_or_else(|| input.to_owned());
+        let restored = reg
+            .try_decanonicalize_text(&canonical)
+            .unwrap_or_else(|| canonical.clone());
+        assert_eq!(restored, input, "round-trip failed: canon={canonical:?}");
     }
 
     // ── try_canonicalize_path ─────────────────────────────────────────────────
